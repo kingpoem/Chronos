@@ -1,0 +1,54 @@
+# Rust 构建产物
+target/
+**/*.rs.bk
+*.pdb
+
+# 编译生成的二进制文件
+*.bin
+*.elf
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# RustSBI 下载的二进制文件（可通过 Makefile 自动下载）
+bootloader/rustsbi-qemu.bin
+rustsbi-qemu.bin
+
+# IDE 和编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# 操作系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# 日志文件
+*.log
+*.tmp
+
+# 临时文件
+*.bak
+*.cache
+*.orig
+
+# 调试文件
+*.dSYM/
+*.su
+*.idb
+*.pdb
