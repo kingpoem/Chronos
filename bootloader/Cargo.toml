@@ -3,6 +3,12 @@ name = "bootloader"
 version = "0.1.0"
 edition = "2021"
 
+# Binary-only crate (no library)
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
 [[bin]]
 name = "bootloader"
 path = "src/main.rs"
@@ -17,6 +23,6 @@ codegen-units = 1
 strip = true
 
 [profile.dev]
-opt-level = 0
+opt-level = 1
 debug = true
 

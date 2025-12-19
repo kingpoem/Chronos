@@ -1,0 +1,21 @@
+[package]
+name = "chronos-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+riscv = "0.11"
+lazy_static = { version = "1.4", features = ["spin_no_std"] }
+spin = "0.9"
+sbi-rt = { version = "0.0.3", features = ["legacy"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+panic = "abort"

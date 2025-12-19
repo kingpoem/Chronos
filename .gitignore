@@ -2,6 +2,7 @@
 target/
 **/*.rs.bk
 *.pdb
+build/
 
 # 编译生成的二进制文件
 *.bin
