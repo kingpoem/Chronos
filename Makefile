@@ -9,7 +9,6 @@ RUSTSBI_BIN := bootloader/rustsbi-prototyper.bin
 
 KERNEL_ELF := kernel/target/$(TARGET)/$(MODE)/chronos-kernel
 KERNEL_BIN := build/kernel.bin
-OS_IMG := build/os.img
 
 OBJDUMP := rust-objdump
 OBJCOPY := rust-objcopy
@@ -38,10 +37,7 @@ kernel:
 build: rustsbi kernel
 	@mkdir -p build
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $(KERNEL_BIN)
-	@echo "Creating OS image..."
-	@rm -f $(OS_IMG)
-	@cat $(KERNEL_BIN) > $(OS_IMG)
-	@echo "Build complete: $(OS_IMG)"
+	@echo "Build complete: $(KERNEL_BIN)"
 
 run: build
 	@echo "Running Chronos OS in QEMU..."
@@ -50,7 +46,7 @@ run: build
 		-nographic \
 		-serial mon:stdio \
 		-bios $(RUSTSBI_BIN) \
-		-kernel $(OS_IMG)
+		-kernel $(KERNEL_BIN)
 
 debug: build
 	@echo "Starting QEMU in debug mode..."
@@ -59,7 +55,7 @@ debug: build
 		-nographic \
 		-serial mon:stdio \
 		-bios $(RUSTSBI_BIN) \
-		-kernel $(OS_IMG) \
+		-kernel $(KERNEL_BIN) \
 		-s -S
 
 gdb:
@@ -78,9 +74,7 @@ disasm-kernel:
 	@$(OBJDUMP) -d $(KERNEL_ELF) | less
 
 info:
-	@echo "Kernel size:"
+	@echo "Kernel binary size:"
 	@ls -lh $(KERNEL_BIN)
-	@echo "Total OS image size:"
-	@ls -lh $(OS_IMG)
-	@echo "RustSBI size:"
+	@echo "RustSBI binary size:"
 	@ls -lh $(RUSTSBI_BIN)

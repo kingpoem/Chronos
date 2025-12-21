@@ -42,8 +42,7 @@ OS2025-Chronos/
 │   └── rustsbi/config.toml
 ├── Makefile            # 顶层构建文件
 └── build/              # 构建输出
-    ├── kernel.bin
-    └── os.img
+    └── kernel.bin      # 内核二进制文件
 ```
 
 ### 2. 关键文件说明
@@ -105,8 +104,7 @@ make clean        # 清理构建
 #### 构建流程
 1. 编译 RustSBI → `rustsbi/target/.../rustsbi-prototyper` → 转换为 `bootloader/rustsbi-prototyper.bin`
 2. 编译 kernel → `kernel/target/.../chronos-kernel`
-3. 转换为二进制 → `build/kernel.bin`
-4. 创建镜像 → `build/os.img` (只包含 kernel.bin)
+3. 转换为二进制 → `build/kernel.bin` (直接作为 QEMU 的 -kernel 参数)
 
 ### 5. 运行方式
 
@@ -118,7 +116,7 @@ qemu-system-riscv64 \
     -machine virt \
     -nographic \
     -bios bootloader/rustsbi-prototyper.bin \
-    -kernel build/os.img
+    -kernel build/kernel.bin
 ```
 
 ### 6. 模块职责划分

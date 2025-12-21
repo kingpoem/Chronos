@@ -90,8 +90,8 @@ qemu-system-riscv64 \
     -machine virt \
     -nographic \
     -serial mon:stdio \
-    -bios rustsbi/target/.../rustsbi-prototyper  # 注意：使用 ELF 文件
-    -kernel build/os.img                          # OS 镜像
+    -bios bootloader/rustsbi-prototyper.bin      # RustSBI 二进制文件
+    -kernel build/kernel.bin                      # 内核二进制文件
 ```
 
 #### 3.2 QEMU 的加载行为
@@ -101,8 +101,8 @@ qemu-system-riscv64 \
    - 设置程序计数器（PC）到 RustSBI 的入口点 `_start`
    - 初始化寄存器：`a0 = hartid`, `a1 = dtb_address`
 
-2. **加载 OS 镜像**：
-   - QEMU 将 `-kernel` 指定的 `os.img` 加载到内存 `0x80200000`
+2. **加载内核镜像**：
+   - QEMU 将 `-kernel` 指定的 `kernel.bin` 加载到内存 `0x80200000`
    - 这是由 QEMU 的固件加载逻辑自动完成的
 
 3. **传递动态信息**：
