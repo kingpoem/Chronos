@@ -13,7 +13,7 @@ pub const MEMORY_START: usize = 0x8000_0000;
 pub const MEMORY_END: usize = 0x8800_0000;
 
 /// Kernel code start (defined by linker)
-pub const KERNEL_START: usize = 0x8022_0000;
+pub const KERNEL_START: usize = 0x8020_0000;
 
 /// Kernel code end (assume kernel + data < 2MB, heap starts at 2MB offset)
 pub const KERNEL_END: usize = 0x8042_0000;

@@ -2,18 +2,17 @@
 
 ## ✅ 完成的工作
 
-### 1. 项目结构重构
-将原本混杂在 `bootloader` 目录中的代码分离成：
-- **bootloader**: 纯引导程序（~57行代码）
-  - 职责：BSS清零、跳转到内核
+### 1. 项目结构
+- **RustSBI**: 固件层（存放在 bootloader/ 目录）
+  - 职责：硬件初始化、加载内核镜像
 - **kernel**: 完整的操作系统内核
   - 包含：内存管理、控制台、trap、task、syscall等模块
 
 ### 2. 内存布局规划
 ```
-0x80000000 - Bootloader
+0x80000000 - RustSBI (~1MB)
 0x80200000 - Kernel (代码+数据)
-0x80300000 - Kernel Heap (8MB)
+0x80420000 - Kernel Heap (8MB)
 0x88000000 - 物理内存结束
 ```
 
