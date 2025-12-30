@@ -1,12 +1,13 @@
 //! Interrupt and trap handling module
 
+pub mod context;
+
+pub use context::TrapContext;
+
 use crate::syscall::syscall;
 use crate::{global_asm, println};
-use context::TrapContext;
 use riscv::register::mtvec::TrapMode;
 use riscv::register::{scause, stval, stvec};
-
-mod context;
 
 global_asm!(include_str!("trap.S"));
 
@@ -25,7 +26,7 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
     let stval = stval::read();
     match scause.cause() {
         scause::Trap::Exception(scause::Exception::UserEnvCall) => {
-            cx.spec += 4;
+            cx.sepc += 4;
             cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
         }
         scause::Trap::Exception(scause::Exception::StoreFault)
