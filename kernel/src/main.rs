@@ -64,5 +64,5 @@ fn clear_bss() {
 fn test_kernel() {
     println!("Testing memory management...");
     mm::test();
-    println!("✓ Memory management OK");
+    println!("Memory management OK");
 }

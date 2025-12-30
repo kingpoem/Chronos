@@ -15,7 +15,7 @@ _start:
     .option pop
     tail rust_main
 
-    .section .stack,"aw",@nobits
+    .section .bss.stack
     .globl boot_stack_lower_bound
 boot_stack_lower_bound:
     .space 4096 * 16

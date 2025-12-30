@@ -51,10 +51,4 @@ pub fn shutdown() -> ! {
     // Fallback to legacy shutdown if SRST fails or returns
     // Note: sbi-rt's legacy::shutdown() panics if it returns, so this is a last resort
     let _ = sbi::legacy::shutdown();
-
-    loop {
-        unsafe {
-            core::arch::asm!("wfi", options(nomem, nostack));
-        }
-    }
 }
