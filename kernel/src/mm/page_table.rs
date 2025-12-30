@@ -228,7 +228,19 @@ impl PageTable {
         // Set the leaf entry
         let leaf_entry = unsafe { (*current_table).entry_mut(indexes[2]) };
         if leaf_entry.is_valid() {
-            return Err("Page already mapped");
+             // Page already mapped - we need to merge permissions for overlapping ELF segments
+             // This happens when .text and .rodata share the same page
+             if leaf_entry.ppn() != ppn {
+                 // Different physical page - this is an error
+                 crate::println!("Error: Page already mapped to different PPN. VPN: {:?}, Old PPN: {:?}, New PPN: {:?}", vpn, leaf_entry.ppn(), ppn);
+                 return Err("Page already mapped to different PPN");
+             } else {
+                 // Same physical page - merge permissions (OR the flags together)
+                 let old_flags = leaf_entry.flags();
+                 let new_flags = PTEFlags(old_flags.bits() | flags.bits());
+                 *leaf_entry = PageTableEntry::new_with_ppn(ppn, new_flags | PTEFlags::V);
+                 return Ok(());
+             }
         }
 
         *leaf_entry = PageTableEntry::new_with_ppn(ppn, flags | PTEFlags::V);

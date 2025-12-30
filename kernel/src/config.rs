@@ -43,3 +43,12 @@ pub const MAX_SYSCALL_NUM: usize = 500;
 
 /// Clock frequency (10MHz for QEMU)
 pub const CLOCK_FREQ: usize = 10_000_000;
+
+/// Trampoline virtual address (highest page)
+pub const TRAMPOLINE: usize = usize::MAX - memory_layout::PAGE_SIZE + 1;
+
+/// Trap context virtual address (one page below trampoline)
+pub const TRAP_CONTEXT: usize = TRAMPOLINE - memory_layout::PAGE_SIZE;
+
+/// User stack top virtual address (grows downward from here)
+pub const USER_STACK_TOP: usize = TRAP_CONTEXT;

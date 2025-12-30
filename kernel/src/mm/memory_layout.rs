@@ -88,8 +88,24 @@ impl PhysPageNum {
         PhysAddr(self.0 << PAGE_SIZE_BITS)
     }
 
+    pub fn as_addr(&self) -> usize {
+        self.0 << PAGE_SIZE_BITS
+    }
+
     pub fn as_ptr<T>(&self) -> *mut T {
         (self.0 << PAGE_SIZE_BITS) as *mut T
+    }
+}
+
+impl From<usize> for PhysPageNum {
+    fn from(v: usize) -> Self {
+        Self(v)
+    }
+}
+
+impl Into<usize> for PhysPageNum {
+    fn into(self) -> usize {
+        self.0
     }
 }
 
@@ -136,6 +152,10 @@ impl VirtPageNum {
         VirtAddr(self.0 << PAGE_SIZE_BITS)
     }
 
+    pub fn from_addr(addr: usize) -> Self {
+        Self(addr >> PAGE_SIZE_BITS)
+    }
+
     /// Get indexes for 3-level page table (SV39)
     pub fn indexes(&self) -> [usize; 3] {
         let vpn = self.0;
@@ -144,5 +164,12 @@ impl VirtPageNum {
             (vpn >> 9) & 0x1FF,  // Level 1
             vpn & 0x1FF,         // Level 0
         ]
+    }
+}
+
+impl core::ops::Add<usize> for VirtPageNum {
+    type Output = Self;
+    fn add(self, rhs: usize) -> Self {
+        Self(self.0 + rhs)
     }
 }

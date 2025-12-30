@@ -1,14 +1,13 @@
-use crate::{println, sbi};
+use crate::{println, sbi, task};
 
 pub fn sys_exit(exit_code: i32) -> ! {
     println!("[kernel] Application exited with code {}.", exit_code);
-    // TODO: Call exit_current_and_run_next when task manager is ready
-    sbi::shutdown()
+    task::exit_current_and_run_next(exit_code);
+    panic!("Unreachable after exit_current_and_run_next!");
 }
 
 pub fn sys_yield() -> isize {
-    // TODO: Implement yield when scheduler is ready
-    println!("[kernel] sys_yield called");
+    task::suspend_current_and_run_next();
     0
 }
 

@@ -19,6 +19,13 @@ pub use page_table::{PTEFlags, PageTable, PageTableEntry};
 
 use crate::config::memory_layout::*;
 use crate::{println, sbi};
+use lazy_static::lazy_static;
+use spin::Mutex;
+
+lazy_static! {
+    /// Kernel address space
+    pub static ref KERNEL_SPACE: Mutex<MemorySet> = Mutex::new(MemorySet::new_kernel());
+}
 
 /// Initialize the memory management system
 ///
@@ -48,6 +55,11 @@ pub fn init(_dtb: usize) {
         heap::init_heap();
     }
     sbi::console_putstr("[MM] Heap allocator initialized\n");
+
+    // Initialize Kernel Space and enable paging
+    // Note: KERNEL_SPACE depends on heap allocation, so this must be after heap::init_heap
+    KERNEL_SPACE.lock().activate();
+    sbi::console_putstr("[MM] Kernel address space initialized and paging enabled\n");
 
     sbi::console_putstr("[MM] Memory management system initialized successfully\n");
 }

@@ -17,7 +17,7 @@ OBJDUMP := rust-objdump
 OBJCOPY := rust-objcopy
 GDB := riscv64-unknown-elf-gdb
 
-.PHONY: all bootloader kernel rustsbi build run clean debug
+.PHONY: all bootloader kernel user rustsbi build run clean debug
 
 all: build
 
@@ -37,7 +37,11 @@ bootloader:
 	@echo "Building bootloader..."
 	@cd bootloader && cargo build --$(MODE) --target $(TARGET)
 
-kernel:
+user:
+	@echo "Building user applications..."
+	@cd user && cargo build --$(MODE) --target $(TARGET)
+
+kernel: user
 	@echo "Building kernel..."
 	@cd kernel && cargo build --$(MODE) --target $(TARGET)
 
