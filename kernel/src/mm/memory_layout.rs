@@ -1,31 +1,7 @@
 //! Memory Layout Definitions
 //!
-//! Defines the memory layout for QEMU virt machine (RISC-V 64-bit)
 
-/// Page size: 4KB
-pub const PAGE_SIZE: usize = 4096;
-pub const PAGE_SIZE_BITS: usize = 12;
-
-/// Physical memory start address (QEMU virt machine)
-pub const MEMORY_START: usize = 0x8000_0000;
-
-/// Physical memory end address (128MB)
-pub const MEMORY_END: usize = 0x8800_0000;
-
-/// Kernel code start (defined by linker)
-pub const KERNEL_START: usize = 0x8020_0000;
-
-/// Kernel code end (assume kernel + data < 2MB, heap starts at 2MB offset)
-pub const KERNEL_END: usize = 0x8042_0000;
-
-/// Kernel heap start (2MB from kernel base)
-pub const KERNEL_HEAP_START: usize = 0x8042_0000;
-
-/// Kernel heap size (8MB)
-pub const KERNEL_HEAP_SIZE: usize = 0x80_0000;
-
-/// Kernel heap end
-pub const KERNEL_HEAP_END: usize = KERNEL_HEAP_START + KERNEL_HEAP_SIZE;
+use crate::config::memory_layout::{PAGE_SIZE, PAGE_SIZE_BITS};
 
 /// Convert physical address to page number
 #[inline]

@@ -5,17 +5,20 @@
 //! - Virtual memory management (page tables)
 //! - Heap allocation
 //! - Memory layout definitions
+//! - Memory set management
 
 pub mod frame_allocator;
 pub mod heap;
 pub mod memory_layout;
+pub mod memory_set;
 pub mod page_table;
 
 pub use frame_allocator::{FrameAllocator, FRAME_ALLOCATOR};
-pub use memory_layout::*;
+pub use memory_set::{MapPermission, MapType, MemorySet};
 pub use page_table::{PTEFlags, PageTable, PageTableEntry};
 
-use crate::{sbi, println};
+use crate::config::memory_layout::*;
+use crate::{println, sbi};
 
 /// Initialize the memory management system
 ///
@@ -77,20 +80,27 @@ pub fn test() {
     // Test frame allocation
     if let Some(frame1) = FRAME_ALLOCATOR.alloc() {
         println!("  Frame allocated at PPN: {:#x}", frame1.as_usize());
-        
+
         if let Some(frame2) = FRAME_ALLOCATOR.alloc() {
             println!("  Second frame allocated at PPN: {:#x}", frame2.as_usize());
             FRAME_ALLOCATOR.dealloc(frame2);
         }
-        
+
         FRAME_ALLOCATOR.dealloc(frame1);
         println!("  Frames deallocated");
     }
-    
-    println!("  Free frames: {} / {}", 
+
+    println!(
+        "  Free frames: {} / {}",
         FRAME_ALLOCATOR.free_frames(),
-        FRAME_ALLOCATOR.total_frames());
-    
-    // TODO: Test heap allocation after fixing heap allocator
-    println!("  (Heap allocation tests skipped)");
+        FRAME_ALLOCATOR.total_frames()
+    );
+
+    // Test heap allocation
+    use alloc::vec::Vec;
+    let mut v = Vec::new();
+    for i in 0..10 {
+        v.push(i);
+    }
+    println!("  Heap allocation test: vec = {:?}", v);
 }
