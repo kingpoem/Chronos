@@ -1,6 +1,7 @@
 .macro SAVE_GP n
     sd x\n, \n*8(sp)
 .endm
+<<<<<<< HEAD
 
 .macro LOAD_GP n
     ld x\n, \n*8(sp)
@@ -10,6 +11,10 @@
     .globl __alltraps
     .globl __restore
     .align 2
+=======
+    
+.align 2
+>>>>>>> 93c66b5 (feat: basic os infrastructure.)
 __alltraps:
     csrrw sp, sscratch, sp
     # now sp->kernel stack, sscratch->user stack
@@ -21,6 +26,7 @@ __alltraps:
     sd x3, 3*8(sp)
     # skip tp(x4), application does not use it
     # save x5~x31
+<<<<<<< HEAD
     sd x5, 5*8(sp)
     sd x6, 6*8(sp)
     sd x7, 7*8(sp)
@@ -48,6 +54,13 @@ __alltraps:
     sd x29, 29*8(sp)
     sd x30, 30*8(sp)
     sd x31, 31*8(sp)
+=======
+    .set n, 5
+    .rept 27
+        SAVE_GP %n
+        .set n, n+1
+    .endr
+>>>>>>> 93c66b5 (feat: basic os infrastructure.)
     # we can use t0/t1/t2 freely, because they were saved on kernel stack
     csrr t0, sstatus
     csrr t1, sepc
@@ -59,6 +72,7 @@ __alltraps:
     # set input argument of trap_handler(cx: &mut TrapContext)
     mv a0, sp
     call trap_handler
+<<<<<<< HEAD
 
 __restore:
     # case1: start running app by __restore
@@ -104,3 +118,5 @@ __restore:
     # back to user stack
     ld sp, 2*8(sp)
     sret
+=======
+>>>>>>> 93c66b5 (feat: basic os infrastructure.)

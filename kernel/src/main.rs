@@ -75,15 +75,5 @@ fn clear_bss() {
 fn test_kernel() {
     println!("=== Memory Management Tests ===");
     mm::test();
-    
-    println!("\n=== System Call Tests ===");
-    test_syscalls();
-    
-    println!("\n=== All Tests Passed! ===");
-}
-
-fn test_syscalls() {
-    println!("  Testing system calls...");
-    // System calls will be tested through trap handler
-    println!("  System call framework ready");
+    println!("Memory management OK");
 }
