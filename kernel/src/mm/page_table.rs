@@ -297,6 +297,28 @@ impl PageTable {
     pub fn as_ppn(&self) -> PhysPageNum {
         PhysPageNum::new((self as *const _ as usize) >> PAGE_SIZE_BITS)
     }
+    
+    /// Get a mutable reference to a leaf entry (for modifying flags)
+    /// This is unsafe because it bypasses the normal page table traversal
+    pub unsafe fn get_pte_mut(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+        let indexes = vpn.indexes();
+        let mut current_table = self as *mut PageTable;
+        
+        // Traverse to the leaf entry
+        for &index in &indexes[..2] {
+            let entry = (*current_table).entry(index);
+            if !entry.is_valid() {
+                return None;
+            }
+            if entry.is_leaf() {
+                return None; // Not a leaf entry
+            }
+            current_table = entry.ppn().as_ptr::<PageTable>();
+        }
+        
+        // Get the leaf entry
+        Some((*current_table).entry_mut(indexes[2]))
+    }
 }
 
 impl Debug for PageTable {

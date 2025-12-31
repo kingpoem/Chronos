@@ -49,6 +49,11 @@ SECTIONS
     . = ALIGN(4K);
     ekernel = .;
 
+    .data.apps : ALIGN(4K) {
+        *(.data.apps)
+        *(.data.app_*)
+    }
+
     /DISCARD/ : {
         *(.eh_frame)
     }

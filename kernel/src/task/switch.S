@@ -42,4 +42,7 @@ __switch:
     ld s9, 11*8(a1)
     ld s10, 12*8(a1)
     ld s11, 13*8(a1)
+    # Trap context address should be on kernel stack at (sp - 34*8)
+    # Load it into a0 for __restore
+    addi a0, sp, -34*8
     ret

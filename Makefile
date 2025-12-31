@@ -30,7 +30,11 @@ rustsbi:
 	@$(OBJCOPY) --binary-architecture=riscv64 $(RUSTSBI_ELF) --strip-all -O binary $(RUSTSBI_BIN)
 	@echo "RustSBI prototyper built: $(RUSTSBI_BIN)"
 
-kernel:
+user:
+	@echo "Building user programs..."
+	@cd user && cargo build --$(MODE) --target $(TARGET)
+
+kernel: user
 	@echo "Building kernel..."
 	@cd kernel && cargo build --$(MODE) --target $(TARGET)
 

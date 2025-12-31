@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
-#![cfg_attr(test, allow(dead_code))]
 
 extern crate alloc;
 
@@ -20,8 +19,8 @@ use core::arch::global_asm;
 
 global_asm!(include_str!("entry.S"));
 
-/// 内核入口点
-/// 由 bootloader 调用
+/// kernel entry point
+/// called by bootloader
 #[no_mangle]
 pub fn kernel_main(hartid: usize, dtb: usize) -> ! {
     // Clear BSS segment
@@ -36,12 +35,22 @@ pub fn kernel_main(hartid: usize, dtb: usize) -> ! {
     println!("=================================");
     println!("Hart ID: {}", hartid);
     println!("DTB: {:#x}", dtb);
+    
+    // Print critical register state at kernel entry
+    crate::trap::print_critical_registers("[Kernel Entry]");
 
     // Initialize subsystems
     println!("\n[Init] Initializing subsystems...");
+    crate::trap::print_critical_registers("[Before mm::init]");
     mm::init(dtb);
+    crate::trap::print_critical_registers("[After mm::init]");
+    println!("[Init] Memory management initialized, calling trap::init()...");
     trap::init();
+    crate::trap::print_critical_registers("[After trap::init]");
+    println!("[Init] Trap handler initialized, calling task::init()...");
     task::init();
+    crate::trap::print_critical_registers("[After task::init]");
+    println!("[Init] Task management initialized");
 
     println!("\n[Kernel] All subsystems initialized!");
     
@@ -55,9 +64,25 @@ pub fn kernel_main(hartid: usize, dtb: usize) -> ! {
     println!("  ✓ SV39 Page Table");
     println!("  ✓ Trap Handling");
     println!("  ✓ System Calls");
-    println!("  ✓ User Mode Support (Ready)");
+    println!("  ✓ User Mode Support");
     
-    println!("\n[Kernel] Shutting down...");
+    // Load and run user programs
+    println!("\n[Kernel] Loading user programs...");
+    task::load_apps();
+    
+    // Enable timer interrupt AFTER tasks are loaded
+    // This ensures the system is fully initialized before handling interrupts
+    println!("[Kernel] Enabling timer interrupt for preemptive scheduling...");
+    trap::enable_timer_interrupt();
+    crate::trap::print_critical_registers("[After enabling timer interrupt]");
+    
+    // Start first task
+    println!("[Kernel] Starting first task...");
+    crate::trap::print_critical_registers("[Before switch_task]");
+    task::switch_task();
+    
+    // Should never reach here
+    println!("\n[Kernel] All tasks completed, shutting down...");
     sbi::shutdown();
 }
 
