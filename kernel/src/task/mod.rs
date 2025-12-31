@@ -1,7 +1,4 @@
 //! Task (process) management module
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 
 mod context;
 
@@ -22,34 +19,6 @@ pub struct SimpleTask {
 
 static mut TASKS: [Option<SimpleTask>; 2] = [None, None];
 static mut CURRENT_TASK: usize = 0;
->>>>>>> c32c54c (feat: task subsystem.)
-=======
-use crate::config::{KERNEL_STACK_SIZE, USER_STACK_SIZE};
-
-#[repr(align(4096))]
-struct KernelStack {
-    data: [u8; KERNEL_STACK_SIZE],
-}
-
-#[repr(align(4096))]
-struct UserStack {
-    data: [u8; USER_STACK_SIZE],
-}
-
-static KERNEL_STACK: KernelStack = KernelStack {
-    data: [0; KERNEL_STACK_SIZE],
-};
-
-static USER_STACK: UserStack = UserStack {
-    data: [0; USER_STACK_SIZE],
-};
-
-impl UserStack {
-    fn get_sp(&self) -> usize {
-        self.data.as_ptr() as usize + USER_STACK_SIZE
-    }
-}
->>>>>>> 93c66b5 (feat: basic os infrastructure.)
 
 pub fn init() {
     println!("[Task] Task management initialized");

@@ -2,7 +2,7 @@
 //! 
 //! Defines the context structure for task switching
 
-use crate::trap::context::TrapContext;
+use crate::trap::TrapContext;
 
 /// Task context for context switching
 #[repr(C)]

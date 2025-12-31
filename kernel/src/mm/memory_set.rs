@@ -5,6 +5,7 @@
 use super::frame_allocator::{FrameAllocator, FRAME_ALLOCATOR};
 use super::memory_layout::*;
 use super::page_table::{PTEFlags, PageTable, PageTableEntry};
+use crate::config::memory_layout::{PAGE_SIZE, MEMORY_END};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::arch::asm;
