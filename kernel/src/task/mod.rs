@@ -359,6 +359,18 @@ pub fn switch_task() {
             crate::trap::print_hex_usize(kernel_stack_top);
             crate::sbi::console_putstr("\n");
             
+            // CRITICAL: Ensure interrupts are disabled and timer interrupt is cleared before calling app_init_context
+            // app_init_context will temporarily modify sstatus (enable interrupts), so we must ensure:
+            // 1. Interrupts are disabled (sstatus::SIE = 0)
+            // 2. Timer interrupt is disabled in sie (sie::STIMER = 0) - temporarily disable it
+            // 3. This ensures that even if interrupts are enabled during app_init_context, timer won't trigger
+            unsafe {
+                use riscv::register::{sstatus, sie};
+                sstatus::clear_sie(); // Disable interrupts
+                sie::clear_stimer();  // Temporarily disable timer interrupt in sie
+                // We will re-enable it after app_init_context returns and before setting the timer
+            }
+            
             let mut trap_cx_data = crate::trap::TrapContext::app_init_context(
                 entry_point,
                 user_sp,
@@ -367,6 +379,14 @@ pub fn switch_task() {
                 trap_handler as *const () as usize,
             );
             trap_cx_data.user_satp = user_token;
+            
+            // CRITICAL: Immediately disable interrupts after app_init_context returns
+            // app_init_context modifies sstatus to get the correct value, which may enable interrupts
+            // We must disable interrupts again to ensure they remain disabled until we switch to user mode
+            unsafe {
+                use riscv::register::sstatus;
+                sstatus::clear_sie(); // Disable interrupts again
+            }
             
             // Debug: Print trap context details
             crate::sbi::console_putstr("[Task] Trap context created:\n");
@@ -485,6 +505,13 @@ pub fn switch_task() {
                     crate::sbi::console_putstr("[switch_task] ERROR: user_satp is 0! Cannot switch to user mode!\n");
                     crate::sbi::shutdown();
                 }
+                
+                // CRITICAL: Set the first timer right before switching to user mode
+                // This ensures we have enough time to complete initialization and switch to user mode
+                // before the first timer interrupt triggers
+                // According to rCore: set timer right before jumping to __restore
+                crate::trap::set_next_timer();
+                crate::sbi::console_putstr("[switch_task] First timer set, ready to switch to user mode\n");
                 
                 // Now jump to __restore with trap context address in a0
                 // __restore will restore sstatus which contains the correct interrupt state

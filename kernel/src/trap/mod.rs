@@ -50,7 +50,10 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
     let is_user_mode = cx.sstatus.spp() == sstatus::SPP::User;
     
     // Debug: log trap type and mode (use simple string matching to avoid format! allocation)
-    crate::sbi::console_putstr("[Trap] Trap: ");
+    let scause_code = scause.bits();
+    crate::sbi::console_putstr("[Trap] Trap: scause=0x");
+    print_hex_usize(scause_code);
+    crate::sbi::console_putstr(" (");
     match scause.cause() {
         scause::Trap::Interrupt(scause::Interrupt::SupervisorTimer) => {
             crate::sbi::console_putstr("Timer");
@@ -64,19 +67,31 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
         scause::Trap::Exception(scause::Exception::InstructionPageFault) => {
             crate::sbi::console_putstr("InstructionPageFault");
         }
+        scause::Trap::Exception(scause::Exception::InstructionFault) => {
+            crate::sbi::console_putstr("InstructionFault");
+        }
+        scause::Trap::Exception(scause::Exception::LoadFault) => {
+            crate::sbi::console_putstr("LoadFault");
+        }
+        scause::Trap::Exception(scause::Exception::StoreFault) => {
+            crate::sbi::console_putstr("StoreFault");
+        }
+        scause::Trap::Exception(scause::Exception::IllegalInstruction) => {
+            crate::sbi::console_putstr("IllegalInstruction");
+        }
         scause::Trap::Exception(scause::Exception::UserEnvCall) => {
             crate::sbi::console_putstr("UserEnvCall");
         }
         _ => {
-            crate::sbi::console_putstr("Other");
+            crate::sbi::console_putstr("Unknown");
         }
     }
     if is_user_mode {
-        crate::sbi::console_putstr(" (User)");
+        crate::sbi::console_putstr(" User");
     } else {
-        crate::sbi::console_putstr(" (Kernel)");
+        crate::sbi::console_putstr(" Kernel");
     }
-    crate::sbi::console_putstr(", stval=0x");
+    crate::sbi::console_putstr("), stval=0x");
     print_hex_usize(stval);
     crate::sbi::console_putstr(", sepc=0x");
     print_hex_usize(cx.sepc);
@@ -223,8 +238,89 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
                 crate::sbi::shutdown();
             }
         }
-        scause::Trap::Exception(scause::Exception::InstructionFault)
-        | scause::Trap::Exception(scause::Exception::InstructionPageFault) => {
+        scause::Trap::Exception(scause::Exception::InstructionFault) => {
+            crate::sbi::console_putstr("[Trap] InstructionFault: ");
+            if is_user_mode {
+                crate::sbi::console_putstr("User mode\n");
+                crate::sbi::console_putstr("[Debug] Checking page permissions for VA 0x");
+                print_hex_usize(cx.sepc);
+                crate::sbi::console_putstr("\n");
+                
+                // Check if the page is mapped and what permissions it has
+                // We can check the page table directly without switching address spaces
+                let task_manager = crate::task::TASK_MANAGER.lock();
+                if let Some(current_pid) = task_manager.get_current_task() {
+                    if let Some(task) = task_manager.get_task(current_pid) {
+                        // Try to translate using MemorySet (no need to switch page table)
+                        use crate::mm::memory_layout::{VirtAddr, VirtPageNum};
+                        let va = VirtAddr::new(cx.sepc);
+                        let vpn = va.page_number();
+                        
+                        // Access user memory set (memory_set is pub in TaskControlBlock)
+                        // Use page_table() method to get reference to page table
+                        if let Some((ppn, flags)) = task.memory_set.page_table().translate(vpn) {
+                            crate::sbi::console_putstr("[Debug] Page is mapped: VPN 0x");
+                            print_hex_usize(vpn.0);
+                            crate::sbi::console_putstr(" -> PPN 0x");
+                            print_hex_usize(ppn.0);
+                            crate::sbi::console_putstr(", flags=0x");
+                            print_hex_usize(flags.bits() as usize);
+                            crate::sbi::console_putstr("\n");
+                            crate::sbi::console_putstr("[Debug] Flags: R=");
+                            if flags.contains(crate::mm::page_table::PTEFlags::R) {
+                                crate::sbi::console_putstr("1");
+                            } else {
+                                crate::sbi::console_putstr("0");
+                            }
+                            crate::sbi::console_putstr(", W=");
+                            if flags.contains(crate::mm::page_table::PTEFlags::W) {
+                                crate::sbi::console_putstr("1");
+                            } else {
+                                crate::sbi::console_putstr("0");
+                            }
+                            crate::sbi::console_putstr(", X=");
+                            if flags.contains(crate::mm::page_table::PTEFlags::X) {
+                                crate::sbi::console_putstr("1");
+                            } else {
+                                crate::sbi::console_putstr("0");
+                            }
+                            crate::sbi::console_putstr(", U=");
+                            if flags.contains(crate::mm::page_table::PTEFlags::U) {
+                                crate::sbi::console_putstr("1");
+                            } else {
+                                crate::sbi::console_putstr("0");
+                            }
+                            crate::sbi::console_putstr("\n");
+                            
+                            // If X or U is missing, that's the problem
+                            if !flags.contains(crate::mm::page_table::PTEFlags::X) {
+                                crate::sbi::console_putstr("[Debug] ERROR: Page is missing X (Execute) permission!\n");
+                            }
+                            if !flags.contains(crate::mm::page_table::PTEFlags::U) {
+                                crate::sbi::console_putstr("[Debug] ERROR: Page is missing U (User) permission!\n");
+                            }
+                        } else {
+                            crate::sbi::console_putstr("[Debug] Page is NOT mapped: VPN 0x");
+                            print_hex_usize(vpn.0);
+                            crate::sbi::console_putstr("\n");
+                        }
+                    }
+                }
+                drop(task_manager);
+                
+                crate::task::exit_current_and_run_next(-1);
+            } else {
+                // Kernel mode page fault - this is a serious error
+                crate::sbi::console_putstr("Kernel mode PANIC!\n");
+                crate::sbi::console_putstr("stval=0x");
+                print_hex_usize(stval);
+                crate::sbi::console_putstr(", sepc=0x");
+                print_hex_usize(cx.sepc);
+                crate::sbi::console_putstr("\n");
+                crate::sbi::shutdown();
+            }
+        }
+        scause::Trap::Exception(scause::Exception::InstructionPageFault) => {
             crate::sbi::console_putstr("[Trap] InstructionPageFault: ");
             if is_user_mode {
                 crate::sbi::console_putstr("User mode, killing task\n");
@@ -263,9 +359,9 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
 }
 
 /// Enable timer interrupt (should be called after tasks are loaded)
-/// NOTE: This function only sets up the timer interrupt, but does NOT enable interrupts
-/// Interrupts will be enabled when we switch to user mode (via sstatus in trap context)
-/// This prevents timer interrupts from triggering while we're still in kernel mode
+/// NOTE: This function only enables timer interrupt in sie, but does NOT set the timer
+/// The timer should be set in switch_task() right before switching to user mode
+/// This prevents timer interrupts from triggering during kernel initialization
 pub fn enable_timer_interrupt() {
     crate::sbi::console_putstr("[Trap] Setting up timer interrupt...\n");
     
@@ -280,9 +376,11 @@ pub fn enable_timer_interrupt() {
     }
     crate::sbi::console_putstr("[Trap] Timer interrupt enabled in sie (interrupts still disabled in sstatus)\n");
     
-    // Set initial timer (but interrupts won't trigger until sstatus::SIE is set)
-    set_next_timer();
-    crate::sbi::console_putstr("[Trap] Initial timer set (interrupts will be enabled when switching to user mode)\n");
+    // CRITICAL: Do NOT set timer here!
+    // The timer should be set in switch_task() right before jumping to __restore
+    // This ensures we have enough time to complete initialization and switch to user mode
+    // before the first timer interrupt triggers
+    crate::sbi::console_putstr("[Trap] Timer will be set in switch_task() before switching to user mode\n");
     
     // DO NOT enable sstatus::SIE here - it will be enabled when we restore sstatus in __restore
     // The trap context's sstatus should have SIE bit set, so when we switch to user mode,
@@ -290,7 +388,9 @@ pub fn enable_timer_interrupt() {
 }
 
 /// Set next timer interrupt (10ms interval for more responsive scheduling)
-fn set_next_timer() {
+/// This function should be called right before switching to user mode for the first time,
+/// and also in trap_handler after handling timer interrupts
+pub fn set_next_timer() {
     use crate::config::CLOCK_FREQ;
     use crate::sbi;
     

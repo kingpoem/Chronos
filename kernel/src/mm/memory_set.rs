@@ -16,7 +16,7 @@
 
 use super::frame_allocator::FRAME_ALLOCATOR;
 use super::memory_layout::*;
-use super::page_table::{PTEFlags, PageTable};
+use super::page_table::{PTEFlags, PageTable, PageTableEntry};
 use crate::config::memory_layout::{PAGE_SIZE, MEMORY_END, USER_STACK_SIZE};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -103,6 +103,7 @@ impl Drop for FrameTracker {
 /// Map area
 pub struct MapArea {
     vpn_range: VPNRange,
+    actual_start_va: usize,  // Actual start virtual address (before page alignment)
     data_frames: BTreeMap<VirtPageNum, FrameTracker>,
     map_type: MapType,
     map_perm: MapPermission,
@@ -115,10 +116,29 @@ impl MapArea {
         map_type: MapType,
         map_perm: MapPermission,
     ) -> Self {
-        let start_vpn = VirtAddr::new(start_va).page_number();
+        Self::new_with_actual_start(start_va, start_va, end_va, map_type, map_perm)
+    }
+    
+    /// Create a new map area with actual start address
+    /// 
+    /// # Arguments
+    /// * `actual_start_va` - Actual start virtual address (before page alignment)
+    /// * `aligned_start_va` - Page-aligned start virtual address
+    /// * `end_va` - End virtual address (page-aligned)
+    /// * `map_type` - Mapping type
+    /// * `map_perm` - Mapping permissions
+    pub fn new_with_actual_start(
+        actual_start_va: usize,
+        aligned_start_va: usize,
+        end_va: usize,
+        map_type: MapType,
+        map_perm: MapPermission,
+    ) -> Self {
+        let start_vpn = VirtAddr::new(aligned_start_va).page_number();
         let end_vpn = VirtAddr::new(end_va).page_number();
         Self {
             vpn_range: VPNRange::new(start_vpn, end_vpn),
+            actual_start_va,
             data_frames: BTreeMap::new(),
             map_type,
             map_perm,
@@ -147,65 +167,95 @@ impl MapArea {
     
     /// Map one page
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
-        let pte_flags = PTEFlags::from_bits(self.map_perm.bits()).unwrap();
+        // Convert MapPermission to PTEFlags
+        // MapPermission doesn't include V (Valid) bit, so we need to add it
+        let pte_flags = PTEFlags::V | PTEFlags::from_bits(self.map_perm.bits()).unwrap();
         
         // Check if page is already mapped
         if let Some((existing_ppn, existing_flags)) = page_table.translate(vpn) {
-            // Determine expected PPN based on map type
-            let expected_ppn = match self.map_type {
-                MapType::Identical => PhysPageNum::new(vpn.0),
+            // When multiple segments map to the same page, we should reuse the existing physical page
+            // instead of creating a new one. This preserves the data from the first segment.
+            // Only create a new page if:
+            // 1. The existing mapping is Identical (va == pa) and we want Framed, or
+            // 2. The existing mapping is Framed but we want Identical
+            let should_reuse = match self.map_type {
+                MapType::Identical => {
+                    // If we want Identical, check if existing is also Identical
+                    existing_ppn.0 == vpn.0
+                },
                 MapType::Framed => {
-                    // For Framed mapping, check if we already have a frame tracked
-                    if let Some(frame_tracker) = self.data_frames.get(&vpn) {
-                        frame_tracker.ppn
-                    } else {
-                        // No frame tracked yet, allocate a new one
-                        let frame = FRAME_ALLOCATOR.alloc().expect("Failed to allocate frame");
-                        self.data_frames.insert(vpn, FrameTracker::new(frame));
-                        frame
-                    }
+                    // If we want Framed, check if existing is also Framed (not Identical)
+                    // For user space, Framed pages are never identity mapped
+                    existing_ppn.0 != vpn.0
                 }
             };
             
-            // Check if existing mapping matches what we want
-            if existing_ppn == expected_ppn && existing_flags.bits() == pte_flags.bits() {
-                // Same mapping, skip silently
+            if should_reuse {
+                // Reuse existing physical page and merge permissions
+                let merged_flags = PTEFlags::from_bits(
+                    existing_flags.bits() | pte_flags.bits()
+                ).unwrap();
+                
+                // Check if permissions changed
+                if merged_flags.bits() != existing_flags.bits() {
+                    // Need to update permissions only (not remap)
+                    let va = vpn.addr().0;
+                    crate::sbi::console_putstr("[INFO] Merging permissions for VA=0x");
+                    crate::trap::print_hex_usize(va);
+                    crate::sbi::console_putstr(", existing flags=0x");
+                    crate::trap::print_hex_usize(existing_flags.bits() as usize);
+                    crate::sbi::console_putstr(", new flags=0x");
+                    crate::trap::print_hex_usize(pte_flags.bits() as usize);
+                    crate::sbi::console_putstr(", merged flags=0x");
+                    crate::trap::print_hex_usize(merged_flags.bits() as usize);
+                    crate::sbi::console_putstr("\n");
+                    
+                    // Update the PTE flags directly
+                    unsafe {
+                        let indexes = vpn.indexes();
+                        let mut current_table = page_table as *mut PageTable;
+                        for &index in &indexes[..2] {
+                            let entry = (*current_table).entry_mut(index);
+                            current_table = entry.ppn().as_ptr::<PageTable>();
+                        }
+                        let leaf_entry = (*current_table).entry_mut(indexes[2]);
+                        *leaf_entry = PageTableEntry::new_with_ppn(existing_ppn, merged_flags);
+                    }
+                }
+                
+                // Note: We don't track the frame in this MapArea's data_frames
+                // because it's already tracked by the first MapArea that created it.
+                // The frame will be freed when the first MapArea is dropped.
+                
+                // Skip remapping - we're reusing the existing page
                 return;
             }
             
-            // Different mapping - this should not happen in normal flow
-            // For user address spaces, we should unmap and remap to ensure consistency
+            // Can't reuse - this is an error case (shouldn't happen for user space)
             let va = vpn.addr().0;
             crate::sbi::console_putstr("[WARNING] Page conflict: VA=0x");
             crate::trap::print_hex_usize(va);
             crate::sbi::console_putstr(", existing PPN=0x");
             crate::trap::print_hex_usize(existing_ppn.0);
-            crate::sbi::console_putstr(", expected PPN=0x");
-            crate::trap::print_hex_usize(expected_ppn.0);
+            crate::sbi::console_putstr(", existing flags=0x");
+            crate::trap::print_hex_usize(existing_flags.bits() as usize);
+            crate::sbi::console_putstr(", new flags=0x");
+            crate::trap::print_hex_usize(pte_flags.bits() as usize);
             crate::sbi::console_putstr("\n");
-            
-            // Unmap the existing page and remap with the correct PPN
-            // This ensures copy_data() will access the correct physical address
-            if let Err(e) = page_table.unmap(vpn) {
-                crate::sbi::console_putstr("[ERROR] Failed to unmap conflicting page: ");
-                crate::sbi::console_putstr(e);
-                crate::sbi::console_putstr("\n");
-                panic!("Failed to unmap conflicting page: {}", e);
-            }
-            // Continue to map with the expected PPN below
+            panic!("Page conflict that cannot be resolved by reusing existing page");
         }
         
         // Allocate or determine PPN
         let ppn: PhysPageNum = match self.map_type {
             MapType::Identical => PhysPageNum::new(vpn.0),
             MapType::Framed => {
-                // Check if we already have a frame tracked (from the check above)
+                // Check if we already have a frame tracked
                 if let Some(frame_tracker) = self.data_frames.get(&vpn) {
                     frame_tracker.ppn
                 } else {
                     // Allocate a new frame
-                let frame = FRAME_ALLOCATOR.alloc().expect("Failed to allocate frame");
-                self.data_frames.insert(vpn, FrameTracker::new(frame));
+                    let frame = FRAME_ALLOCATOR.alloc().expect("Failed to allocate frame");
+                    self.data_frames.insert(vpn, FrameTracker::new(frame));
                     frame
                 }
             }
@@ -226,11 +276,21 @@ impl MapArea {
     }
     
     /// Unmap one page
+    /// Only unmap if this MapArea owns the page (tracked in data_frames)
+    /// If multiple MapAreas share the same page, only the owner should unmap it
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         if self.map_type == MapType::Framed {
-            self.data_frames.remove(&vpn);
+            // Only unmap if we own this page (tracked in data_frames)
+            if self.data_frames.remove(&vpn).is_some() {
+                // We own this page, so unmap it
+                page_table.unmap(vpn).expect("Failed to unmap page");
+            }
+            // If we don't own this page (not in data_frames), it's owned by another MapArea
+            // Don't unmap it - let the owner handle it
+        } else {
+            // For Identical mapping, always unmap
+            page_table.unmap(vpn).expect("Failed to unmap page");
         }
-        page_table.unmap(vpn).expect("Failed to unmap page");
     }
     
     /// Map all pages in this area (段 -> 页的映射)
@@ -258,11 +318,14 @@ impl MapArea {
         let mut start: usize = 0;
         let mut current_vpn = self.vpn_range.start();
         let len = data.len();
-        let start_va = self.start_va();
+        let aligned_start_va = self.start_va();  // Page-aligned start address
+        let actual_start_va = self.actual_start_va;  // Actual start address (before alignment)
         let end_va = self.end_va();
         
-        crate::sbi::console_putstr("[copy_data] Starting: VA=0x");
-        crate::trap::print_hex_usize(start_va);
+        crate::sbi::console_putstr("[copy_data] Starting: actual_VA=0x");
+        crate::trap::print_hex_usize(actual_start_va);
+        crate::sbi::console_putstr(", aligned_VA=0x");
+        crate::trap::print_hex_usize(aligned_start_va);
         crate::sbi::console_putstr("-0x");
         crate::trap::print_hex_usize(end_va);
         crate::sbi::console_putstr(", data_len=");
@@ -378,12 +441,37 @@ impl MapArea {
                 panic!("Physical address below KERNEL_HEAP_START! This should not happen for user space pages.");
             }
             
-            let dst = kernel_va as *mut u8;
+            // Calculate offset within the page: actual segment start VA - page start VA
+            // This ensures that if multiple segments map to the same page,
+            // each segment writes to the correct offset instead of overwriting from the start
+            // Use actual_start_va (before alignment) instead of aligned_start_va
+            let page_offset = if current_va <= actual_start_va {
+                actual_start_va - current_va
+            } else {
+                // This shouldn't happen, but handle it gracefully
+                0
+            };
             
-            crate::sbi::console_putstr("[copy_data] Copying ");
+            // Calculate how much data to copy in this page
+            // The data might not start at the beginning of the page
+            let data_start_in_page = if start == 0 {
+                page_offset
+            } else {
+                // For subsequent pages, data starts at the beginning
+                0
+            };
+            
+            // Calculate the actual destination address within the page
+            let dst = (kernel_va + data_start_in_page) as *mut u8;
+            
+            crate::sbi::console_putstr("[copy_data] Page offset=0x");
+            crate::trap::print_hex_usize(page_offset);
+            crate::sbi::console_putstr(", data_start_in_page=0x");
+            crate::trap::print_hex_usize(data_start_in_page);
+            crate::sbi::console_putstr(", Copying ");
             crate::trap::print_hex_usize(src.len());
             crate::sbi::console_putstr(" bytes to kernel_va=0x");
-            crate::trap::print_hex_usize(kernel_va);
+            crate::trap::print_hex_usize(kernel_va + data_start_in_page);
             crate::sbi::console_putstr("\n");
             
             unsafe {
@@ -881,8 +969,9 @@ impl MemorySet {
                 let file_size = ph.file_size();
                 let file_offset = ph.offset();
                 
-                let start_va = vaddr as usize;
+                let start_va = vaddr as usize;  // Actual start address (may not be page-aligned)
                 // Align to page boundary (段 -> 页的转换)
+                let aligned_start_va = super::memory_layout::align_down(start_va);
                 let end_va = super::memory_layout::align_up(start_va + mem_size as usize);
                 
                 if end_va > max_end_vaddr {
@@ -911,9 +1000,11 @@ impl MemorySet {
                 };
                 
                 // Create MapArea for this segment (段)
+                // Use actual_start_va (vaddr) to preserve segment offset for proper data placement
+                // aligned_start_va is used for page table mapping (must be page-aligned)
                 // MapArea.push() will later create page table entries (页) for all pages in this segment
                 memory_set.push(
-                    MapArea::new(start_va, end_va, MapType::Framed, perm),
+                    MapArea::new_with_actual_start(start_va, aligned_start_va, end_va, MapType::Framed, perm),
                     Some(segment_data),
                 );
             }
