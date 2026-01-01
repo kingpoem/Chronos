@@ -100,30 +100,42 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
     match scause.cause() {
         scause::Trap::Interrupt(scause::Interrupt::SupervisorTimer) => {
             // Timer interrupt - trigger preemptive scheduling
-            crate::sbi::console_putstr("[Timer] Timer interrupt\n");
-            set_next_timer();
-            let task_manager = crate::task::TASK_MANAGER.lock();
-            let task_count = task_manager.task_count();
-            drop(task_manager);
+            // CRITICAL: Only trigger task switching from user mode interrupts
+            // Kernel mode interrupts should NOT trigger task switching
+            // This is the rCore way: kernel mode interrupts are handled synchronously
+            // and should not cause context switches
             
-            if task_count > 0 {
-                let mut scheduler = crate::task::SCHEDULER.lock();
-                if scheduler.tick() {
-                    // Time slice expired, switch task
-                    drop(scheduler);
-                    crate::sbi::console_putstr("[Timer] Time slice expired, switching task\n");
-                    crate::task::switch_task();
-                } else {
-                    drop(scheduler);
+            set_next_timer();
+            
+            if is_user_mode {
+                // User mode interrupt: can trigger preemptive scheduling
+                let task_manager = crate::task::TASK_MANAGER.lock();
+                let task_count = task_manager.task_count();
+                drop(task_manager);
+                
+                if task_count > 0 {
+                    let mut scheduler = crate::task::SCHEDULER.lock();
+                    if scheduler.tick() {
+                        // Time slice expired, switch task
+                        drop(scheduler);
+                        crate::task::switch_task();
+                    } else {
+                        drop(scheduler);
+                    }
                 }
             } else {
-                // No tasks yet, just clear the interrupt
-                crate::sbi::console_putstr("[Timer] No tasks, ignoring\n");
+                // Kernel mode interrupt: do NOT trigger task switching
+                // Just set the next timer and return
+                // This prevents issues when kernel is executing and gets interrupted
             }
         }
         scause::Trap::Exception(scause::Exception::UserEnvCall) => {
             cx.sepc += 4;
-            cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
+            // System call arguments: a0-a5 (x[10]-x[15]), syscall number in a7 (x[17])
+            cx.x[10] = syscall(
+                cx.x[17],
+                [cx.x[10], cx.x[11], cx.x[12], cx.x[13], cx.x[14], cx.x[15]]
+            ) as usize;
         }
         scause::Trap::Exception(scause::Exception::StoreFault)
         | scause::Trap::Exception(scause::Exception::StorePageFault) => {
@@ -251,22 +263,30 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
 }
 
 /// Enable timer interrupt (should be called after tasks are loaded)
+/// NOTE: This function only sets up the timer interrupt, but does NOT enable interrupts
+/// Interrupts will be enabled when we switch to user mode (via sstatus in trap context)
+/// This prevents timer interrupts from triggering while we're still in kernel mode
 pub fn enable_timer_interrupt() {
-    crate::sbi::console_putstr("[Trap] Enabling timer interrupt...\n");
+    crate::sbi::console_putstr("[Trap] Setting up timer interrupt...\n");
+    
+    // Disable interrupts while setting up timer
     unsafe {
-        // Enable timer interrupt
+        sstatus::clear_sie();
+    }
+    
+    unsafe {
+        // Enable timer interrupt in sie (but interrupts are still disabled via sstatus::SIE)
         sie::set_stimer();
     }
-    crate::sbi::console_putstr("[Trap] Enabling supervisor interrupts...\n");
-    unsafe {
-        // Enable supervisor interrupts
-        sstatus::set_sie();
-    }
-    crate::sbi::console_putstr("[Trap] Supervisor interrupts enabled\n");
+    crate::sbi::console_putstr("[Trap] Timer interrupt enabled in sie (interrupts still disabled in sstatus)\n");
     
-    // Set initial timer
+    // Set initial timer (but interrupts won't trigger until sstatus::SIE is set)
     set_next_timer();
-    crate::sbi::console_putstr("[Trap] Initial timer set\n");
+    crate::sbi::console_putstr("[Trap] Initial timer set (interrupts will be enabled when switching to user mode)\n");
+    
+    // DO NOT enable sstatus::SIE here - it will be enabled when we restore sstatus in __restore
+    // The trap context's sstatus should have SIE bit set, so when we switch to user mode,
+    // interrupts will be automatically enabled
 }
 
 /// Set next timer interrupt (10ms interval for more responsive scheduling)

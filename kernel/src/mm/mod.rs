@@ -100,6 +100,15 @@ pub fn init(_dtb: usize) {
     // Verify address translation is working (but be careful not to access unmapped memory)
     verify_address_translation();
     
+    // Print page table contents for debugging
+    {
+        let ks = KERNEL_SPACE_INTERNAL.lock();
+        if let Some(ref kernel_space) = *ks {
+            sbi::console_putstr("[MM] Printing kernel page table contents...\n");
+            kernel_space.page_table().print_contents(100); // Print up to 100 entries
+        }
+    }
+    
     sbi::console_putstr("[MM] Kernel address space activated\n");
     sbi::console_putstr("[MM] Memory management system initialized successfully\n");
 }

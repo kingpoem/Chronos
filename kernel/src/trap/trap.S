@@ -3,8 +3,24 @@
     .globl __restore
     .align 2
 __alltraps:
+    # Check if we're coming from user mode or kernel mode
+    # sstatus.SPP bit: 0 = User, 1 = Supervisor
+    # We need to read sstatus BEFORE swapping, so save it to a temporary register
+    csrr t0, sstatus
+    # Check SPP bit (bit 8): if 0, we're from user mode; if 1, we're from kernel mode
+    andi t0, t0, 0x100  # Mask to get SPP bit (bit 8)
+    beqz t0, from_user_mode
+    # From kernel mode: don't swap, sscratch and sp both point to kernel stack
+    # But we need to ensure sscratch points to the current kernel stack (sp)
+    # Update sscratch to current sp for consistency
+    csrw sscratch, sp
+    j allocate_trap_context
+from_user_mode:
+    # From user mode: swap sp and sscratch
+    # sscratch should point to kernel stack, sp points to user stack
     csrrw sp, sscratch, sp
     # now sp->kernel stack, sscratch->user stack
+allocate_trap_context:
     # allocate a TrapContext on kernel stack
     addi sp, sp, -34*8
     # save general-purpose registers
@@ -70,6 +86,8 @@ __restore:
     # Get user token from trap context (stored at offset 34*8, after sstatus and sepc)
     # TrapContext layout: x[32] (32*8) + sstatus (1*8) + sepc (1*8) + user_satp (1*8)
     ld t2, 34*8(sp)  # user_satp
+    # Debug: We can't easily print in assembly, but we can check the value
+    # If t2 is 0, we go to kernel mode; if non-zero, we go to user mode
     # Check if we're returning to kernel mode (user_satp == 0 means kernel mode)
     beqz t2, restore_to_kernel
     # Restore to user mode
@@ -108,6 +126,9 @@ __restore:
     # Switch to user address space (user token is in t2)
     csrw satp, t2
     sfence.vma
+    # sstatus has already been restored above (line 84)
+    # It contains the correct interrupt enable state (SIE bit)
+    # No need to modify it again
     sret
 restore_to_kernel:
     # Restore to kernel mode (from kernel interrupt)

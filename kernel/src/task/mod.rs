@@ -61,46 +61,150 @@ pub fn init() {
 
 /// Switch to next task
 pub fn switch_task() {
-    println!("[Task] switch_task called");
-    let mut task_manager = TASK_MANAGER.lock();
-    let mut scheduler = SCHEDULER.lock();
+    crate::sbi::console_putstr("[switch_task] Called\n");
     
+    // Debug: print current state before switching
+    unsafe {
+        use core::arch::asm;
+        let current_sp: usize;
+        let current_satp: usize;
+        let current_sscratch: usize;
+        asm!("mv {}, sp", out(reg) current_sp);
+        asm!("csrr {}, satp", out(reg) current_satp);
+        asm!("csrr {}, sscratch", out(reg) current_sscratch);
+        crate::sbi::console_putstr("[switch_task] Before switch: sp=0x");
+        crate::trap::print_hex_usize(current_sp);
+        crate::sbi::console_putstr(", satp=0x");
+        crate::trap::print_hex_usize(current_satp);
+        crate::sbi::console_putstr(", sscratch=0x");
+        crate::trap::print_hex_usize(current_sscratch);
+        crate::sbi::console_putstr("\n");
+    }
+    
+    crate::sbi::console_putstr("[switch_task] Called\n");
+    
+    // Debug: print current state before switching
+    unsafe {
+        use core::arch::asm;
+        let current_sp: usize;
+        let current_satp: usize;
+        let current_sscratch: usize;
+        asm!("mv {}, sp", out(reg) current_sp);
+        asm!("csrr {}, satp", out(reg) current_satp);
+        asm!("csrr {}, sscratch", out(reg) current_sscratch);
+        crate::sbi::console_putstr("[switch_task] Before switch: sp=0x");
+        crate::trap::print_hex_usize(current_sp);
+        crate::sbi::console_putstr(", satp=0x");
+        crate::trap::print_hex_usize(current_satp);
+        crate::sbi::console_putstr(", sscratch=0x");
+        crate::trap::print_hex_usize(current_sscratch);
+        crate::sbi::console_putstr("\n");
+    }
+    
+    println!("[Task] switch_task called");
+    crate::sbi::console_putstr("[switch_task] Locking TASK_MANAGER...\n");
+    let mut task_manager = TASK_MANAGER.lock();
+    crate::sbi::console_putstr("[switch_task] TASK_MANAGER locked\n");
+    crate::sbi::console_putstr("[switch_task] Locking SCHEDULER...\n");
+    let mut scheduler = SCHEDULER.lock();
+    crate::sbi::console_putstr("[switch_task] SCHEDULER locked\n");
+    
+    crate::sbi::console_putstr("[switch_task] Getting current task...\n");
     let current_pid = task_manager.get_current_task();
+    crate::sbi::console_putstr("[switch_task] Current task: ");
+    if let Some(pid) = current_pid {
+        crate::trap::print_hex_usize(pid);
+    } else {
+        crate::sbi::console_putstr("None");
+    }
+    crate::sbi::console_putstr("\n");
     println!("[Task] Current task: {:?}", current_pid);
+    crate::sbi::console_putstr("[switch_task] Total tasks: ");
+    crate::trap::print_hex_usize(task_manager.task_count());
+    crate::sbi::console_putstr("\n");
     println!("[Task] Total tasks: {}", task_manager.task_count());
     
+    crate::sbi::console_putstr("[switch_task] Processing current task...\n");
     if let Some(current) = current_pid {
+        crate::sbi::console_putstr("[switch_task] Marking current task as ready: pid=");
+        crate::trap::print_hex_usize(current);
+        crate::sbi::console_putstr("\n");
         // Mark current task as ready
         if let Some(task) = task_manager.get_task_mut(current) {
+            crate::sbi::console_putstr("[switch_task] Current task found, marking as ready\n");
             task.task_status = TaskStatus::Ready;
+        } else {
+            crate::sbi::console_putstr("[switch_task] WARNING: Current task not found!\n");
         }
+    } else {
+        crate::sbi::console_putstr("[switch_task] No current task\n");
     }
     
     // Find next task
+    crate::sbi::console_putstr("[switch_task] Finding next task...\n");
     let next_pid = if let Some(current) = current_pid {
+        crate::sbi::console_putstr("[switch_task] Scheduling from current task: pid=");
+        crate::trap::print_hex_usize(current);
+        crate::sbi::console_putstr("\n");
         scheduler.schedule_next(current, &*task_manager)
     } else {
+        crate::sbi::console_putstr("[switch_task] Scheduling from start (no current task)\n");
         scheduler.schedule_next(0, &*task_manager)
     };
     
+    crate::sbi::console_putstr("[switch_task] Next task: ");
+    if let Some(pid) = next_pid {
+        crate::trap::print_hex_usize(pid);
+    } else {
+        crate::sbi::console_putstr("None");
+    }
+    crate::sbi::console_putstr("\n");
+    
     if let Some(next) = next_pid {
+        crate::sbi::console_putstr("[switch_task] Switching to task ");
+        crate::trap::print_hex_usize(next);
+        crate::sbi::console_putstr("\n");
         println!("[Task] Switching to task {}", next);
+        
         // Mark next task as running
+        crate::sbi::console_putstr("[switch_task] Marking next task as running...\n");
         if let Some(task) = task_manager.get_task_mut(next) {
+            crate::sbi::console_putstr("[switch_task] Next task found, marking as running\n");
             task.task_status = TaskStatus::Running;
+        } else {
+            crate::sbi::console_putstr("[switch_task] ERROR: Next task not found!\n");
+            panic!("Next task not found!");
         }
         
         // Don't switch address space here - it will be done in __restore
         // We need to stay in kernel space to access kernel stack during __switch
+        crate::sbi::console_putstr("[switch_task] Setting current task...\n");
         task_manager.set_current_task(Some(next));
+        crate::sbi::console_putstr("[switch_task] Current task set\n");
         
+        crate::sbi::console_putstr("[switch_task] Getting task contexts...\n");
         let current_cx = if let Some(current) = current_pid {
-            task_manager.get_task(current).map(|t| &t.task_cx as *const TaskContext)
+            crate::sbi::console_putstr("[switch_task] Getting current task context: pid=");
+            crate::trap::print_hex_usize(current);
+            crate::sbi::console_putstr("\n");
+            task_manager.get_task(current).map(|t| {
+                crate::sbi::console_putstr("[switch_task] Current task found, getting task_cx\n");
+                &t.task_cx as *const TaskContext
+            })
         } else {
+            crate::sbi::console_putstr("[switch_task] No current task, current_cx=None\n");
             None
         };
         
-        let next_cx = task_manager.get_task(next).map(|t| &t.task_cx as *const TaskContext);
+        crate::sbi::console_putstr("[switch_task] Getting next task context: pid=");
+        crate::trap::print_hex_usize(next);
+        crate::sbi::console_putstr("\n");
+        let next_cx = task_manager.get_task(next).map(|t| {
+            crate::sbi::console_putstr("[switch_task] Next task found, getting task_cx\n");
+            &t.task_cx as *const TaskContext
+        });
+        
+        crate::sbi::console_putstr("[switch_task] Task contexts obtained\n");
         
         if let (Some(curr_ptr), Some(next_ptr)) = (current_cx, next_cx) {
             // For task switch, we need to:
@@ -125,6 +229,18 @@ pub fn switch_task() {
             crate::trap::print_hex_usize(next_kernel_sp);
             crate::sbi::console_putstr("\n");
             
+            // Ensure we're in kernel address space BEFORE accessing trap context
+            // get_trap_cx() uses physical address as kernel virtual address (identity mapping)
+            // So we must be in kernel address space when calling it
+            let kernel_token = crate::task::task::KERNEL_SPACE.lock().token();
+            
+            // Switch to kernel address space before accessing trap context
+            unsafe {
+                use core::arch::asm;
+                asm!("csrw satp, {}", in(reg) kernel_token);
+                asm!("sfence.vma");
+            }
+            
             let next_trap_cx_data = {
                 let trap_cx = next_task.get_trap_cx();
                 crate::trap::TrapContext {
@@ -135,24 +251,21 @@ pub fn switch_task() {
                 }
             };
             
-            // Ensure we're in kernel address space
-            let kernel_token = crate::task::task::KERNEL_SPACE.lock().token();
             drop(task_manager);
             drop(scheduler);
             
-                    unsafe {
-                        use core::arch::asm;
-                        // Print register state before switch
-                        crate::trap::print_critical_registers("[Before __switch]");
-                        
-                        // Switch to kernel address space
-                        asm!("csrw satp, {}", in(reg) kernel_token);
-                        asm!("sfence.vma");
-                        
-                        // Print register state after address space switch
-                        crate::sbi::console_putstr("[After satp switch] satp=0x");
-                        crate::trap::print_hex_usize(kernel_token);
-                        crate::sbi::console_putstr("\n");
+            unsafe {
+                use core::arch::asm;
+                // Print register state before switch
+                crate::trap::print_critical_registers("[Before __switch]");
+                
+                // Note: We already switched to kernel address space above
+                // No need to switch again here
+                
+                // Print register state after address space switch
+                crate::sbi::console_putstr("[After satp switch] satp=0x");
+                crate::trap::print_hex_usize(kernel_token);
+                crate::sbi::console_putstr("\n");
                         
                         // Prepare trap context on next task's kernel stack
                         let next_trap_cx_kernel = (next_kernel_sp - 34 * 8) as *mut crate::trap::TrapContext;
@@ -222,17 +335,97 @@ pub fn switch_task() {
             crate::trap::print_hex_usize(kernel_sp);
             crate::sbi::console_putstr("\n");
             
-            // Get trap context data before dropping task_manager
-            let trap_cx_data = {
+            // Get task information before dropping task_manager
+            let kernel_token = crate::task::task::KERNEL_SPACE.lock().token();
+            let (entry_point, user_sp, user_token, kernel_stack_top) = {
                 let task = task_manager.get_task(next).unwrap();
-                let trap_cx = task.get_trap_cx();
-                crate::trap::TrapContext {
-                    x: trap_cx.x,
-                    sstatus: trap_cx.sstatus,
-                    sepc: trap_cx.sepc,
-                    user_satp: trap_cx.user_satp,
-                }
+                let entry_point = task.entry_point;
+                let user_sp = task.user_sp;
+                let user_token = task.get_user_token();
+                let kernel_stack_top = task.task_cx.sp;
+                (entry_point, user_sp, user_token, kernel_stack_top)
             };
+            
+            // Create trap context data
+            extern "C" {
+                fn trap_handler();
+            }
+            
+            crate::sbi::console_putstr("[Task] Creating trap context: entry=0x");
+            crate::trap::print_hex_usize(entry_point);
+            crate::sbi::console_putstr(", user_sp=0x");
+            crate::trap::print_hex_usize(user_sp);
+            crate::sbi::console_putstr(", kernel_sp=0x");
+            crate::trap::print_hex_usize(kernel_stack_top);
+            crate::sbi::console_putstr("\n");
+            
+            let mut trap_cx_data = crate::trap::TrapContext::app_init_context(
+                entry_point,
+                user_sp,
+                kernel_token,
+                kernel_stack_top,
+                trap_handler as *const () as usize,
+            );
+            trap_cx_data.user_satp = user_token;
+            
+            // Debug: Print trap context details
+            crate::sbi::console_putstr("[Task] Trap context created:\n");
+            crate::sbi::console_putstr("  entry_point=0x");
+            crate::trap::print_hex_usize(entry_point);
+            crate::sbi::console_putstr("\n  user_sp=0x");
+            crate::trap::print_hex_usize(user_sp);
+            crate::sbi::console_putstr("\n  user_satp=0x");
+            crate::trap::print_hex_usize(user_token);
+            crate::sbi::console_putstr("\n  sepc=0x");
+            crate::trap::print_hex_usize(trap_cx_data.sepc);
+            
+            // Check sstatus SPP and SIE bits
+            use riscv::register::sstatus;
+            let sstatus_val = trap_cx_data.sstatus;
+            
+            // Get sstatus bits by temporarily writing to register
+            unsafe {
+                let saved_bits: usize;
+                core::arch::asm!("csrr {}, sstatus", out(reg) saved_bits);
+                
+                // Construct sstatus bits from the Sstatus value
+                // We need to write it to register to read it back
+                // Let's use set_spp and set_sie to construct the value
+                let original = sstatus::read();
+                if sstatus_val.spp() == sstatus::SPP::User {
+                    sstatus::set_spp(sstatus::SPP::User);
+                } else {
+                    sstatus::set_spp(sstatus::SPP::Supervisor);
+                }
+                if sstatus_val.sie() {
+                    sstatus::set_sie();
+                } else {
+                    sstatus::clear_sie();
+                }
+                let sstatus_bits: usize;
+                core::arch::asm!("csrr {}, sstatus", out(reg) sstatus_bits);
+                
+                // Restore original
+                core::arch::asm!("csrw sstatus, {}", in(reg) saved_bits);
+                
+                crate::sbi::console_putstr("\n  sstatus bits=0x");
+                crate::trap::print_hex_usize(sstatus_bits);
+            }
+            
+            // Check SPP and SIE using the methods
+            crate::sbi::console_putstr("\n  sstatus.SPP=");
+            if sstatus_val.spp() == sstatus::SPP::User {
+                crate::sbi::console_putstr("User");
+            } else {
+                crate::sbi::console_putstr("Supervisor");
+            }
+            crate::sbi::console_putstr("\n  sstatus.SIE=");
+            if sstatus_val.sie() {
+                crate::sbi::console_putstr("enabled");
+            } else {
+                crate::sbi::console_putstr("disabled");
+            }
+            crate::sbi::console_putstr("\n");
             
             // Ensure we're in kernel address space
             let kernel_token = crate::task::task::KERNEL_SPACE.lock().token();
@@ -283,16 +476,34 @@ pub fn switch_task() {
                 // Ensure user_satp is set
                 (*trap_cx_kernel).user_satp = user_token;
                 
+                // Debug: print user_satp value
+                crate::sbi::console_putstr("[switch_task] First task user_satp=0x");
+                crate::trap::print_hex_usize(user_token);
+                crate::sbi::console_putstr("\n");
+                
+                if user_token == 0 {
+                    crate::sbi::console_putstr("[switch_task] ERROR: user_satp is 0! Cannot switch to user mode!\n");
+                    crate::sbi::shutdown();
+                }
+                
                 // Now jump to __restore with trap context address in a0
+                // __restore will restore sstatus which contains the correct interrupt state
+                // No need to disable interrupts here - __restore handles the state transition
                 extern "C" {
                     fn __restore();
                 }
+                crate::sbi::console_putstr("[switch_task] Jumping to __restore with trap_cx=0x");
+                crate::trap::print_hex_usize(trap_cx_kernel as usize);
+                crate::sbi::console_putstr("\n");
                 asm!(
                     "mv a0, {}",
                     "jal {}",
                     in(reg) trap_cx_kernel as usize,
                     sym __restore,
                 );
+                // Should never reach here
+                crate::sbi::console_putstr("[switch_task] ERROR: Returned from __restore!\n");
+                crate::sbi::shutdown();
             }
         }
     } else {
@@ -318,11 +529,19 @@ pub fn exit_current_and_run_next(exit_code: i32) {
         task_manager.remove_task(pid);
         task_manager.set_current_task(None);
         
-        // If no more tasks, shutdown
+        // If no more tasks, shutdown (disable timer interrupt first)
         if task_manager.task_count() == 0 {
             drop(task_manager);
-            println!("[Task] No more tasks, shutting down...");
-            crate::sbi::shutdown();
+            println!("[Task] No more tasks, disabling timer interrupt and shutting down...");
+            
+            // Disable timer interrupt before shutdown
+            unsafe {
+                use riscv::register::{sie, sstatus};
+                sstatus::clear_sie();  // Disable interrupts
+                sie::clear_stimer();   // Disable timer interrupt
+            }
+            
+            crate::sbi::shutdown();  // shutdown() returns !, so code after this is unreachable
         }
     }
     

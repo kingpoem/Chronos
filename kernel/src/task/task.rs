@@ -23,12 +23,52 @@ pub struct TaskControlBlock {
     pub base_size: usize,
     pub heap_bottom: usize,
     pub program_brk: usize,
+    // Store entry point and user stack for trap context initialization
+    pub entry_point: usize,
+    pub user_sp: usize,
 }
 
 impl TaskControlBlock {
     /// Get trap context
+    /// 
+    /// # Safety
+    /// This function assumes:
+    /// 1. We're in kernel address space (satp points to kernel page table)
+    /// 2. Kernel uses identity mapping (PA == VA)
+    /// 3. The physical page is mapped in kernel address space
     pub fn get_trap_cx(&self) -> &'static mut TrapContext {
-        unsafe { &mut *(self.trap_cx_ppn.as_ptr::<TrapContext>()) }
+        // Convert physical page number to kernel virtual address (identity mapping)
+        // Since kernel uses identity mapping, physical address = virtual address
+        let kernel_va = self.trap_cx_ppn.addr().0;
+        
+        // Debug: print trap context address
+        crate::sbi::console_putstr("[get_trap_cx] PPN=0x");
+        crate::trap::print_hex_usize(self.trap_cx_ppn.0);
+        crate::sbi::console_putstr(" -> kernel_va=0x");
+        crate::trap::print_hex_usize(kernel_va);
+        crate::sbi::console_putstr("\n");
+        
+        // Safety check: ensure we're not accessing kernel code section
+        extern "C" {
+            fn stext();
+            fn ekernel();
+        }
+        let stext_addr = stext as *const () as usize;
+        let ekernel_addr = ekernel as *const () as usize;
+        
+        if kernel_va >= stext_addr && kernel_va < ekernel_addr {
+            crate::sbi::console_putstr("[get_trap_cx] ERROR: Attempting to access kernel code section!\n");
+            crate::sbi::console_putstr("[get_trap_cx] ERROR: PPN=0x");
+            crate::trap::print_hex_usize(self.trap_cx_ppn.0);
+            crate::sbi::console_putstr(", kernel_va=0x");
+            crate::trap::print_hex_usize(kernel_va);
+            crate::sbi::console_putstr(", stext=0x");
+            crate::trap::print_hex_usize(stext_addr);
+            crate::sbi::console_putstr("\n");
+            panic!("get_trap_cx: Attempting to access kernel code section! This indicates a bug in trap_cx_ppn calculation.");
+        }
+        
+        unsafe { &mut *(kernel_va as *mut TrapContext) }
     }
     
     /// Get user token (satp value)
@@ -38,25 +78,35 @@ impl TaskControlBlock {
     
     /// Create a new task from ELF data
     pub fn new(elf_data: &[u8], app_id: usize) -> Self {
-        crate::println!("[Task] Creating task from ELF data (size: {} bytes)", elf_data.len());
-        // Parse ELF - for now, we'll load it as a simple binary
-        crate::println!("[Task] Parsing ELF...");
         let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
-        crate::println!("[Task] ELF parsed: entry_point={:#x}, user_sp={:#x}", entry_point, user_sp);
-        // Trap context is stored in user address space at TRAP_CONTEXT
-        let trap_cx_ppn = PhysPageNum::new(
-            memory_set
-                .translate(TRAP_CONTEXT)
-                .expect("Failed to translate TRAP_CONTEXT address")
-                >> PAGE_SIZE.trailing_zeros() as usize
-        );
-        let task_status = TaskStatus::Ready;
         
-        // Allocate kernel stack
+        // Trap context is stored in user address space at TRAP_CONTEXT
+        let trap_cx_pa = memory_set
+            .translate(TRAP_CONTEXT)
+            .expect("Failed to translate TRAP_CONTEXT address");
+        
+        let trap_cx_ppn = PhysPageNum::new(
+            trap_cx_pa >> PAGE_SIZE.trailing_zeros() as usize
+        );
+        
+        // Safety check: ensure trap_cx_ppn doesn't point to kernel code section
+        extern "C" {
+            fn stext();
+            fn ekernel();
+        }
+        let stext_addr = stext as *const () as usize;
+        let ekernel_addr = ekernel as *const () as usize;
+        let kernel_va = trap_cx_ppn.addr().0;
+        
+        if kernel_va >= stext_addr && kernel_va < ekernel_addr {
+            panic!("trap_cx_ppn calculation error: points to kernel code section! PPN=0x{:x}, kernel_va=0x{:x}", trap_cx_ppn.0, kernel_va);
+        }
+        
+        let task_status = TaskStatus::Ready;
         let (_kernel_stack_bottom, kernel_stack_top) = kernel_stack_position(app_id);
         let task_cx = TaskContext::goto_trap_return(kernel_stack_top);
         
-        let task = Self {
+        Self {
             task_status,
             task_cx,
             memory_set,
@@ -64,22 +114,9 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
-        };
-        
-        // Initialize trap context
-        let user_token = task.memory_set.token();
-        let trap_cx = task.get_trap_cx();
-        let mut trap_context = TrapContext::app_init_context(
             entry_point,
             user_sp,
-            KERNEL_SPACE.lock().token(),
-            kernel_stack_top,
-            trap_handler as *const () as usize,
-        );
-        // Store user token in trap context for __restore to use
-        trap_context.user_satp = user_token;
-        *trap_cx = trap_context;
-        task
+        }
     }
 }
 

@@ -35,27 +35,39 @@ impl TrapContext {
         entry: usize,
         user_sp: usize,
         _kernel_satp: usize,
-        kernel_sp: usize,
+        _kernel_sp: usize,
         _trap_handler: usize,
     ) -> Self {
-        let sstatus = sstatus::read();
-        let mut new_sstatus = sstatus;
-        unsafe {
-            sstatus::set_spp(sstatus::SPP::User);
-        }
+        // Read current sstatus and create a new one with SPP set to User and SIE enabled
+        // This follows rCore's implementation: set SPP to User and enable interrupts (SIE bit)
+        // so that when we restore it, we'll be in user mode with interrupts enabled
+        let sstatus_val = unsafe {
+            // Temporarily modify the register to get the correct value
+            let original_bits: usize;
+            core::arch::asm!("csrr {}, sstatus", out(reg) original_bits);
+            
+            // Set SPP to User (clear bit 8) and enable interrupts (set bit 1, SIE)
+            // SPP bit (bit 8): 0 = User, 1 = Supervisor
+            // SIE bit (bit 1): 0 = disabled, 1 = enabled
+            let modified_bits = (original_bits & !(1 << 8)) | (1 << 1);
+            core::arch::asm!("csrw sstatus, {}", in(reg) modified_bits);
+            let result = sstatus::read();
+            
+            // Restore original value
+            core::arch::asm!("csrw sstatus, {}", in(reg) original_bits);
+            result
+        };
         
         let mut cx = Self {
             x: [0; 32],
-            sstatus: new_sstatus,
+            sstatus: sstatus_val, // SPP is set to User, SIE is enabled
             sepc: entry,
             user_satp: 0,  // Will be set when task is created
         };
         cx.set_sp(user_sp);
         
-        // Set sscratch to kernel stack for trap handling
-        unsafe {
-            core::arch::asm!("csrw sscratch, {}", in(reg) kernel_sp);
-        }
+        // NOTE: sscratch will be set when we actually switch to the task
+        // Don't set it here to avoid side effects during task creation
         
         cx
     }

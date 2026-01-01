@@ -5,23 +5,30 @@
 use super::task::TaskControlBlock;
 use super::TaskStatus;
 use crate::config::MAX_APP_NUM;
+use alloc::vec::Vec;
 
 pub struct TaskManager {
-    tasks: [Option<TaskControlBlock>; MAX_APP_NUM],
+    tasks: Vec<Option<TaskControlBlock>>,
     current_task: Option<usize>,
 }
 
 impl TaskManager {
     pub fn new() -> Self {
+        // Use Vec instead of fixed array to avoid stack overflow
+        // Vec will allocate on heap, which is safer for large structures
+        let mut tasks = Vec::with_capacity(MAX_APP_NUM);
+        for _ in 0..MAX_APP_NUM {
+            tasks.push(None);
+        }
         Self {
-            tasks: [const { None }; MAX_APP_NUM],
+            tasks,
             current_task: None,
         }
     }
     
     pub fn add_task(&mut self, task: TaskControlBlock) -> usize {
         for (idx, slot) in self.tasks.iter_mut().enumerate() {
-            if slot.is_none() {
+            if slot.as_ref().is_none() {
                 *slot = Some(task);
                 return idx;
             }
@@ -74,7 +81,7 @@ impl TaskManager {
     }
     
     pub fn task_count(&self) -> usize {
-        self.tasks.iter().filter(|t| t.is_some()).count()
+        self.tasks.iter().filter(|t: &&Option<TaskControlBlock>| t.is_some()).count()
     }
 }
 
