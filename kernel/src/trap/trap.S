@@ -2,6 +2,14 @@
     .globl __alltraps
     .globl __restore
     .align 2
+
+# Helper function to read instruction at address
+# Input: a0 = address
+# Output: a0 = instruction (lower 32 bits)
+.globl debug_read_instruction
+debug_read_instruction:
+    lw a0, 0(a0)
+    ret
 __alltraps:
     # Check if we're coming from user mode or kernel mode
     # sstatus.SPP bit: 0 = User, 1 = Supervisor
@@ -121,11 +129,16 @@ __restore:
     ld x29, 29*8(sp)
     ld x30, 30*8(sp)
     ld x31, 31*8(sp)
-    # Load user stack pointer
-    ld sp, 2*8(sp)
+    # CRITICAL FIX: Load user stack pointer into temporary register FIRST
+    # We must load it before switching page table because sp still points to kernel stack
+    # After switching to user page table, we'll restore sp from the temporary register
+    ld t3, 2*8(sp)  # Load user stack pointer into t3 (t3 is not used elsewhere)
     # Switch to user address space (user token is in t2)
+    # According to rCore implementation, we switch satp BEFORE restoring sp
     csrw satp, t2
-    sfence.vma
+    sfence.vma zero, zero  # Flush entire TLB (all addresses, all ASIDs)
+    # Now restore user stack pointer (sp is now valid in user address space)
+    mv sp, t3
     # sstatus has already been restored above (line 84)
     # It contains the correct interrupt enable state (SIE bit)
     # No need to modify it again

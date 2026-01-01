@@ -212,8 +212,6 @@ pub fn switch_task() {
             // 2. Prepare next task's trap context on its kernel stack
             // 3. Switch context and jump to __restore
             
-            let current = current_pid.unwrap();
-            let current_task = task_manager.get_task(current).unwrap();
             let next_task = task_manager.get_task(next).unwrap();
             
             // Save current task's trap context if it was running
@@ -255,7 +253,6 @@ pub fn switch_task() {
             drop(scheduler);
             
             unsafe {
-                use core::arch::asm;
                 // Print register state before switch
                 crate::trap::print_critical_registers("[Before __switch]");
                 
@@ -328,7 +325,6 @@ pub fn switch_task() {
             // For first task, we need to prepare trap context on kernel stack
             // and then jump to __restore
             let kernel_sp = task_manager.get_task(next).unwrap().task_cx.sp;
-            let user_token = task_manager.get_task(next).unwrap().get_user_token();
             
             // Debug: print kernel stack address
             crate::sbi::console_putstr("[Task] First task kernel stack: 0x");
@@ -411,7 +407,6 @@ pub fn switch_task() {
                 // Construct sstatus bits from the Sstatus value
                 // We need to write it to register to read it back
                 // Let's use set_spp and set_sie to construct the value
-                let original = sstatus::read();
                 if sstatus_val.spp() == sstatus::SPP::User {
                     sstatus::set_spp(sstatus::SPP::User);
                 } else {
@@ -449,6 +444,34 @@ pub fn switch_task() {
             
             // Ensure we're in kernel address space
             let kernel_token = crate::task::task::KERNEL_SPACE.lock().token();
+            
+            // Debug: Print the first instruction that will be executed (before dropping task_manager)
+            // Read instruction through the task's memory set (translates user VA to PA)
+            let task_ref = task_manager.get_task(next).unwrap();
+            if let Some(pa) = task_ref.memory_set.translate(entry_point) {
+                unsafe {
+                    let instr_ptr = pa as *const u32;
+                    let first_instr = *instr_ptr;
+                    let first_instr_16bit = first_instr & 0xFFFF;  // Extract lower 16 bits
+                    crate::sbi::console_putstr("[switch_task] First instruction at 0x");
+                    crate::trap::print_hex_usize(entry_point);
+                    crate::sbi::console_putstr(" (PA=0x");
+                    crate::trap::print_hex_usize(pa);
+                    crate::sbi::console_putstr("): 32-bit=0x");
+                    crate::trap::print_hex_usize(first_instr as usize);
+                    crate::sbi::console_putstr(", 16-bit=0x");
+                    crate::trap::print_hex_usize(first_instr_16bit as usize);
+                    crate::sbi::console_putstr(" (expected: 0x1141)\n");
+                    if first_instr_16bit != 0x1141 {
+                        crate::sbi::console_putstr("[switch_task] ERROR: Instruction mismatch!\n");
+                    }
+                }
+            } else {
+                crate::sbi::console_putstr("[switch_task] WARNING: Cannot translate entry point 0x");
+                crate::trap::print_hex_usize(entry_point);
+                crate::sbi::console_putstr("\n");
+            }
+            
             drop(task_manager);
             drop(scheduler);
             
@@ -490,6 +513,9 @@ pub fn switch_task() {
                     }
                 }
                 drop(kernel_space);
+                    
+                    // Save sepc before moving trap_cx_data
+                    let saved_sepc = trap_cx_data.sepc;
                 
                 // Write trap context to kernel stack
                 *trap_cx_kernel = trap_cx_data;
@@ -505,6 +531,13 @@ pub fn switch_task() {
                     crate::sbi::console_putstr("[switch_task] ERROR: user_satp is 0! Cannot switch to user mode!\n");
                     crate::sbi::shutdown();
                 }
+                    
+                    // Debug: Print sepc and user_satp values that will be restored
+                    crate::sbi::console_putstr("[switch_task] Trap context sepc=0x");
+                    crate::trap::print_hex_usize(saved_sepc);
+                    crate::sbi::console_putstr(", user_satp=0x");
+                    crate::trap::print_hex_usize(user_token);
+                    crate::sbi::console_putstr("\n");
                 
                 // CRITICAL: Set the first timer right before switching to user mode
                 // This ensures we have enough time to complete initialization and switch to user mode

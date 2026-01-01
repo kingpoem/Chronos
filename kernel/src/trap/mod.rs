@@ -41,6 +41,9 @@ pub fn init() {
 
 #[no_mangle]
 pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
+    // Print all S-mode registers for debugging
+    print_all_smode_registers("[Trap Entry]");
+    
     let scause = scause::read();
     let stval = stval::read();
     
@@ -242,55 +245,65 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
             crate::sbi::console_putstr("[Trap] InstructionFault: ");
             if is_user_mode {
                 crate::sbi::console_putstr("User mode\n");
-                crate::sbi::console_putstr("[Debug] Checking page permissions for VA 0x");
-                print_hex_usize(cx.sepc);
-                crate::sbi::console_putstr("\n");
                 
-                // Check if the page is mapped and what permissions it has
-                // We can check the page table directly without switching address spaces
+                // Read and print the instruction that caused the fault
+                // We need to translate user VA to PA first, then read from kernel address space
                 let task_manager = crate::task::TASK_MANAGER.lock();
                 if let Some(current_pid) = task_manager.get_current_task() {
                     if let Some(task) = task_manager.get_task(current_pid) {
-                        // Try to translate using MemorySet (no need to switch page table)
-                        use crate::mm::memory_layout::{VirtAddr, VirtPageNum};
+                        if let Some(pa) = task.memory_set.translate(cx.sepc) {
+                            extern "C" {
+                                fn debug_read_instruction(addr: usize) -> u32;
+                            }
+                            let instr = unsafe { debug_read_instruction(pa) };
+                            crate::sbi::console_putstr("[Debug] Instruction at 0x");
+                            crate::trap::print_hex_usize(cx.sepc);
+                            crate::sbi::console_putstr(" (PA=0x");
+                            crate::trap::print_hex_usize(pa);
+                            crate::sbi::console_putstr("): 0x");
+                            crate::trap::print_hex_usize(instr as usize);
+                            crate::sbi::console_putstr("\n");
+                        }
+                    }
+                }
+                drop(task_manager);
+                
+                // Detailed debugging information
+                let task_manager = crate::task::TASK_MANAGER.lock();
+                if let Some(current_pid) = task_manager.get_current_task() {
+                    crate::sbi::console_putstr("[Debug] Task PID: ");
+                    crate::trap::print_hex_usize(current_pid);
+                    crate::sbi::console_putstr("\n");
+                    crate::sbi::console_putstr("[Debug] Fault address (stval/sepc): 0x");
+                    crate::trap::print_hex_usize(cx.sepc);
+                    crate::sbi::console_putstr("\n");
+                    
+                    if let Some(task) = task_manager.get_task(current_pid) {
+                        crate::sbi::console_putstr("[Debug] Task entry point: 0x");
+                        crate::trap::print_hex_usize(task.entry_point);
+                        crate::sbi::console_putstr("\n");
+                        crate::sbi::console_putstr("[Debug] User stack: 0x");
+                        crate::trap::print_hex_usize(task.user_sp);
+                        crate::sbi::console_putstr("\n");
+                        
+                        // Check if the page is mapped and what permissions it has
+                        use crate::mm::memory_layout::VirtAddr;
                         let va = VirtAddr::new(cx.sepc);
                         let vpn = va.page_number();
                         
-                        // Access user memory set (memory_set is pub in TaskControlBlock)
-                        // Use page_table() method to get reference to page table
                         if let Some((ppn, flags)) = task.memory_set.page_table().translate(vpn) {
-                            crate::sbi::console_putstr("[Debug] Page is mapped: VPN 0x");
-                            print_hex_usize(vpn.0);
-                            crate::sbi::console_putstr(" -> PPN 0x");
-                            print_hex_usize(ppn.0);
+                            crate::sbi::console_putstr("[Debug] Page IS mapped: VPN=0x");
+                            crate::trap::print_hex_usize(vpn.0);
+                            crate::sbi::console_putstr(" -> PPN=0x");
+                            crate::trap::print_hex_usize(ppn.0);
                             crate::sbi::console_putstr(", flags=0x");
-                            print_hex_usize(flags.bits() as usize);
-                            crate::sbi::console_putstr("\n");
-                            crate::sbi::console_putstr("[Debug] Flags: R=");
-                            if flags.contains(crate::mm::page_table::PTEFlags::R) {
-                                crate::sbi::console_putstr("1");
-                            } else {
-                                crate::sbi::console_putstr("0");
-                            }
-                            crate::sbi::console_putstr(", W=");
-                            if flags.contains(crate::mm::page_table::PTEFlags::W) {
-                                crate::sbi::console_putstr("1");
-                            } else {
-                                crate::sbi::console_putstr("0");
-                            }
-                            crate::sbi::console_putstr(", X=");
-                            if flags.contains(crate::mm::page_table::PTEFlags::X) {
-                                crate::sbi::console_putstr("1");
-                            } else {
-                                crate::sbi::console_putstr("0");
-                            }
-                            crate::sbi::console_putstr(", U=");
-                            if flags.contains(crate::mm::page_table::PTEFlags::U) {
-                                crate::sbi::console_putstr("1");
-                            } else {
-                                crate::sbi::console_putstr("0");
-                            }
-                            crate::sbi::console_putstr("\n");
+                            crate::trap::print_hex_usize(flags.bits() as usize);
+                            crate::sbi::console_putstr(" (");
+                            if flags.contains(crate::mm::page_table::PTEFlags::R) { crate::sbi::console_putstr("R"); }
+                            if flags.contains(crate::mm::page_table::PTEFlags::W) { crate::sbi::console_putstr("W"); }
+                            if flags.contains(crate::mm::page_table::PTEFlags::X) { crate::sbi::console_putstr("X"); }
+                            if flags.contains(crate::mm::page_table::PTEFlags::U) { crate::sbi::console_putstr("U"); }
+                            crate::sbi::console_putstr(")\n");
                             
                             // If X or U is missing, that's the problem
                             if !flags.contains(crate::mm::page_table::PTEFlags::X) {
@@ -300,10 +313,19 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
                                 crate::sbi::console_putstr("[Debug] ERROR: Page is missing U (User) permission!\n");
                             }
                         } else {
-                            crate::sbi::console_putstr("[Debug] Page is NOT mapped: VPN 0x");
-                            print_hex_usize(vpn.0);
+                            crate::sbi::console_putstr("[Debug] Page NOT mapped: VPN=0x");
+                            crate::trap::print_hex_usize(vpn.0);
+                            crate::sbi::console_putstr(", VA=0x");
+                            crate::trap::print_hex_usize(cx.sepc);
                             crate::sbi::console_putstr("\n");
                         }
+                        
+                        // Print register values for debugging
+                        crate::sbi::console_putstr("[Debug] Registers: sp=0x");
+                        crate::trap::print_hex_usize(cx.x[2]);
+                        crate::sbi::console_putstr(", ra=0x");
+                        crate::trap::print_hex_usize(cx.x[1]);
+                        crate::sbi::console_putstr("\n");
                     }
                 }
                 drop(task_manager);
@@ -323,7 +345,66 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
         scause::Trap::Exception(scause::Exception::InstructionPageFault) => {
             crate::sbi::console_putstr("[Trap] InstructionPageFault: ");
             if is_user_mode {
-                crate::sbi::console_putstr("User mode, killing task\n");
+                crate::sbi::console_putstr("User mode\n");
+                
+                // Detailed debugging information
+                let task_manager = crate::task::TASK_MANAGER.lock();
+                if let Some(current_pid) = task_manager.get_current_task() {
+                    crate::sbi::console_putstr("[Debug] Task PID: ");
+                    crate::trap::print_hex_usize(current_pid);
+                    crate::sbi::console_putstr("\n");
+                    
+                    if let Some(task) = task_manager.get_task(current_pid) {
+                        crate::sbi::console_putstr("[Debug] Fault address (stval/sepc): 0x");
+                        crate::trap::print_hex_usize(cx.sepc);
+                        crate::sbi::console_putstr("\n");
+                        crate::sbi::console_putstr("[Debug] Task entry point: 0x");
+                        crate::trap::print_hex_usize(task.entry_point);
+                        crate::sbi::console_putstr("\n");
+                        crate::sbi::console_putstr("[Debug] User stack: 0x");
+                        crate::trap::print_hex_usize(task.user_sp);
+                        crate::sbi::console_putstr("\n");
+                        
+                        // Check page mapping
+                        use crate::mm::memory_layout::VirtAddr;
+                        let va = VirtAddr::new(cx.sepc);
+                        let vpn = va.page_number();
+                        
+                        if let Some((ppn, flags)) = task.memory_set.page_table().translate(vpn) {
+                            crate::sbi::console_putstr("[Debug] Page IS mapped: VPN=0x");
+                            crate::trap::print_hex_usize(vpn.0);
+                            crate::sbi::console_putstr(" -> PPN=0x");
+                            crate::trap::print_hex_usize(ppn.0);
+                            crate::sbi::console_putstr(", flags=0x");
+                            crate::trap::print_hex_usize(flags.bits() as usize);
+                            crate::sbi::console_putstr(" (");
+                            if flags.contains(crate::mm::page_table::PTEFlags::R) { crate::sbi::console_putstr("R"); }
+                            if flags.contains(crate::mm::page_table::PTEFlags::W) { crate::sbi::console_putstr("W"); }
+                            if flags.contains(crate::mm::page_table::PTEFlags::X) { crate::sbi::console_putstr("X"); }
+                            if flags.contains(crate::mm::page_table::PTEFlags::U) { crate::sbi::console_putstr("U"); }
+                            crate::sbi::console_putstr(")\n");
+                            
+                            if !flags.contains(crate::mm::page_table::PTEFlags::X) {
+                                crate::sbi::console_putstr("[Debug] ERROR: Page missing X (Execute) permission!\n");
+                            }
+                        } else {
+                            crate::sbi::console_putstr("[Debug] Page NOT mapped: VPN=0x");
+                            crate::trap::print_hex_usize(vpn.0);
+                            crate::sbi::console_putstr(", VA=0x");
+                            crate::trap::print_hex_usize(cx.sepc);
+                            crate::sbi::console_putstr("\n");
+                        }
+                        
+                        // Print register values for debugging
+                        crate::sbi::console_putstr("[Debug] Registers: sp=0x");
+                        crate::trap::print_hex_usize(cx.x[2]);
+                        crate::sbi::console_putstr(", ra=0x");
+                        crate::trap::print_hex_usize(cx.x[1]);
+                        crate::sbi::console_putstr("\n");
+                    }
+                }
+                drop(task_manager);
+                
                 crate::task::exit_current_and_run_next(-1);
             } else {
                 // Kernel mode page fault - this is a serious error
@@ -399,6 +480,158 @@ pub fn set_next_timer() {
     // This gives us 100 ticks per second, and with time_slice=10, each task gets 100ms
     let next = time + (CLOCK_FREQ / 100) as u64; // 10ms
     sbi::set_timer(next);
+}
+
+/// Print all S-mode (Supervisor mode) system registers
+/// This is useful for debugging trap handling
+pub fn print_all_smode_registers(label: &str) {
+    use riscv::register::{satp, sstatus, sscratch, stvec, sie, sip, scause, stval};
+    
+    crate::sbi::console_putstr("\n");
+    crate::sbi::console_putstr(label);
+    crate::sbi::console_putstr(" S-mode Registers:\n");
+    
+    // sstatus - Supervisor status register
+    unsafe {
+        let sstatus_val: usize;
+        core::arch::asm!("csrr {}, sstatus", out(reg) sstatus_val);
+        crate::sbi::console_putstr("  sstatus=0x");
+        print_hex_usize(sstatus_val);
+        let sstatus_reg = sstatus::read();
+        crate::sbi::console_putstr(" (SPP=");
+        match sstatus_reg.spp() {
+            sstatus::SPP::User => crate::sbi::console_putstr("User"),
+            sstatus::SPP::Supervisor => crate::sbi::console_putstr("Supervisor"),
+        }
+        crate::sbi::console_putstr(", SIE=");
+        if sstatus_reg.sie() {
+            crate::sbi::console_putstr("1");
+        } else {
+            crate::sbi::console_putstr("0");
+        }
+        crate::sbi::console_putstr(", SPIE=");
+        if sstatus_reg.spie() {
+            crate::sbi::console_putstr("1");
+        } else {
+            crate::sbi::console_putstr("0");
+        }
+        crate::sbi::console_putstr(")\n");
+    }
+    
+    // sie - Supervisor interrupt enable register
+    let sie_val = sie::read().bits();
+    crate::sbi::console_putstr("  sie=0x");
+    print_hex_usize(sie_val);
+    crate::sbi::console_putstr(" (");
+    let sie_reg = sie::read();
+    if sie_reg.stimer() { crate::sbi::console_putstr("STimer "); }
+    if sie_reg.sext() { crate::sbi::console_putstr("SExt "); }
+    if sie_reg.ssoft() { crate::sbi::console_putstr("SSoft "); }
+    crate::sbi::console_putstr(")\n");
+    
+    // sip - Supervisor interrupt pending register
+    let sip_val = sip::read().bits();
+    crate::sbi::console_putstr("  sip=0x");
+    print_hex_usize(sip_val);
+    crate::sbi::console_putstr(" (");
+    let sip_reg = sip::read();
+    if sip_reg.stimer() { crate::sbi::console_putstr("STimer "); }
+    if sip_reg.sext() { crate::sbi::console_putstr("SExt "); }
+    if sip_reg.ssoft() { crate::sbi::console_putstr("SSoft "); }
+    crate::sbi::console_putstr(")\n");
+    
+    // stvec - Supervisor trap vector base address register
+    let stvec_val = stvec::read().bits();
+    crate::sbi::console_putstr("  stvec=0x");
+    print_hex_usize(stvec_val);
+    match stvec::read().trap_mode() {
+        Some(riscv::register::mtvec::TrapMode::Direct) => crate::sbi::console_putstr(" (Direct)\n"),
+        Some(riscv::register::mtvec::TrapMode::Vectored) => crate::sbi::console_putstr(" (Vectored)\n"),
+        None => crate::sbi::console_putstr(" (Unknown)\n"),
+    }
+    
+    // scounteren - Supervisor counter enable register
+    unsafe {
+        let scounteren_val: usize;
+        core::arch::asm!("csrr {}, scounteren", out(reg) scounteren_val);
+        crate::sbi::console_putstr("  scounteren=0x");
+        print_hex_usize(scounteren_val);
+        crate::sbi::console_putstr("\n");
+    }
+    
+    // sscratch - Supervisor scratch register
+    let sscratch_val = sscratch::read();
+    crate::sbi::console_putstr("  sscratch=0x");
+    print_hex_usize(sscratch_val);
+    crate::sbi::console_putstr("\n");
+    
+    // sepc - Supervisor exception program counter
+    unsafe {
+        let sepc_val: usize;
+        core::arch::asm!("csrr {}, sepc", out(reg) sepc_val);
+        crate::sbi::console_putstr("  sepc=0x");
+        print_hex_usize(sepc_val);
+        crate::sbi::console_putstr("\n");
+    }
+    
+    // scause - Supervisor cause register
+    let scause_val = scause::read().bits();
+    crate::sbi::console_putstr("  scause=0x");
+    print_hex_usize(scause_val);
+    let scause_reg = scause::read();
+    match scause_reg.cause() {
+        scause::Trap::Interrupt(interrupt) => {
+            crate::sbi::console_putstr(" (Interrupt: ");
+            match interrupt {
+                scause::Interrupt::SupervisorTimer => crate::sbi::console_putstr("SupervisorTimer"),
+                scause::Interrupt::SupervisorExternal => crate::sbi::console_putstr("SupervisorExternal"),
+                scause::Interrupt::SupervisorSoft => crate::sbi::console_putstr("SupervisorSoft"),
+                _ => crate::sbi::console_putstr("Other"),
+            }
+            crate::sbi::console_putstr(")\n");
+        }
+        scause::Trap::Exception(exception) => {
+            crate::sbi::console_putstr(" (Exception: ");
+            match exception {
+                scause::Exception::InstructionFault => crate::sbi::console_putstr("InstructionFault"),
+                scause::Exception::IllegalInstruction => crate::sbi::console_putstr("IllegalInstruction"),
+                scause::Exception::Breakpoint => crate::sbi::console_putstr("Breakpoint"),
+                scause::Exception::LoadFault => crate::sbi::console_putstr("LoadFault"),
+                scause::Exception::StoreFault => crate::sbi::console_putstr("StoreFault"),
+                scause::Exception::UserEnvCall => crate::sbi::console_putstr("UserEnvCall"),
+                scause::Exception::InstructionPageFault => crate::sbi::console_putstr("InstructionPageFault"),
+                scause::Exception::LoadPageFault => crate::sbi::console_putstr("LoadPageFault"),
+                scause::Exception::StorePageFault => crate::sbi::console_putstr("StorePageFault"),
+                _ => crate::sbi::console_putstr("Other"),
+            }
+            crate::sbi::console_putstr(")\n");
+        }
+    }
+    
+    // stval - Supervisor trap value register
+    let stval_val = stval::read();
+    crate::sbi::console_putstr("  stval=0x");
+    print_hex_usize(stval_val);
+    crate::sbi::console_putstr("\n");
+    
+    // satp - Supervisor address translation and protection register
+    let satp_val = satp::read().bits();
+    crate::sbi::console_putstr("  satp=0x");
+    print_hex_usize(satp_val);
+    let mode = (satp_val >> 60) & 0xF;
+    if mode == 8 {
+        crate::sbi::console_putstr(" (SV39, PPN=0x");
+        print_hex_usize(satp_val & 0x0FFF_FFFF_FFFF);
+        crate::sbi::console_putstr(")\n");
+    } else if mode == 0 {
+        crate::sbi::console_putstr(" (Bare, no paging)\n");
+    } else {
+        crate::sbi::console_putstr(" (Mode=");
+        print_hex_usize(mode);
+        crate::sbi::console_putstr(")\n");
+    }
+    
+    crate::sbi::console_putstr("\n");
 }
 
 /// Print a usize as hexadecimal (helper for trap handler)

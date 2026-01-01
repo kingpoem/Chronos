@@ -13,7 +13,9 @@ pub mod memory_layout;
 pub mod memory_set;
 pub mod page_table;
 
-pub use frame_allocator::{FrameAllocator, FRAME_ALLOCATOR};
+pub use frame_allocator::FRAME_ALLOCATOR;
+#[allow(unused_imports)]
+pub use frame_allocator::FrameAllocator;
 pub use memory_set::MemorySet;
 // Re-export page table types (may be used by other modules)
 #[allow(unused_imports)]
@@ -99,15 +101,6 @@ pub fn init(_dtb: usize) {
     
     // Verify address translation is working (but be careful not to access unmapped memory)
     verify_address_translation();
-    
-    // Print page table contents for debugging
-    {
-        let ks = KERNEL_SPACE_INTERNAL.lock();
-        if let Some(ref kernel_space) = *ks {
-            sbi::console_putstr("[MM] Printing kernel page table contents...\n");
-            kernel_space.page_table().print_contents(100); // Print up to 100 entries
-        }
-    }
     
     sbi::console_putstr("[MM] Kernel address space activated\n");
     sbi::console_putstr("[MM] Memory management system initialized successfully\n");
@@ -249,4 +242,10 @@ pub fn test() {
     // }
     // println!("  Heap allocation test: vec = {:?}", v);
     println!("  Heap allocation test: skipped (heap allocator initialized)");
+    
+    // Print kernel root page table for debugging
+    println!("\n  [Test] Printing kernel root page table:");
+    if let Some(kernel_space) = KERNEL_SPACE_INTERNAL.lock().as_ref() {
+        kernel_space.print_root_table();
+    }
 }

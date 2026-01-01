@@ -80,6 +80,24 @@ impl TaskControlBlock {
     pub fn new(elf_data: &[u8], app_id: usize) -> Self {
         let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
         
+        // Verify entry point page is mapped
+        use crate::mm::memory_layout::VirtAddr;
+        let entry_vpn = VirtAddr::new(entry_point).page_number();
+        if let Some((ppn, flags)) = memory_set.page_table().translate(entry_vpn) {
+            crate::println!("[Task] Entry page verified: VPN=0x{:x} -> PPN=0x{:x}, flags={:?}", 
+                entry_vpn.0, ppn.0, flags);
+            if !flags.contains(crate::mm::page_table::PTEFlags::X) {
+                crate::println!("[Task] ERROR: Entry page missing X (Execute) permission!");
+            }
+            if !flags.contains(crate::mm::page_table::PTEFlags::U) {
+                crate::println!("[Task] ERROR: Entry page missing U (User) permission!");
+            }
+        } else {
+            crate::println!("[Task] ERROR: Entry page NOT mapped! VPN=0x{:x}, entry_point=0x{:x}", 
+                entry_vpn.0, entry_point);
+            panic!("Entry page not mapped!");
+        }
+        
         // Trap context is stored in user address space at TRAP_CONTEXT
         let trap_cx_pa = memory_set
             .translate(TRAP_CONTEXT)

@@ -169,7 +169,25 @@ impl MapArea {
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         // Convert MapPermission to PTEFlags
         // MapPermission doesn't include V (Valid) bit, so we need to add it
-        let pte_flags = PTEFlags::V | PTEFlags::from_bits(self.map_perm.bits()).unwrap();
+        let perm_bits = self.map_perm.bits();
+        let pte_flags = PTEFlags::V | PTEFlags::from_bits(perm_bits).unwrap();
+        
+        // Debug: print permission conversion for important pages (entry point area)
+        let va = vpn.addr().0;
+        if va >= 0x10000 && va < 0x11000 {
+            crate::sbi::console_putstr("[map_one] Mapping entry area: VA=0x");
+            crate::trap::print_hex_usize(va);
+            crate::sbi::console_putstr(", MapPermission bits=0x");
+            crate::trap::print_hex_usize(perm_bits as usize);
+            crate::sbi::console_putstr(", PTEFlags bits=0x");
+            crate::trap::print_hex_usize(pte_flags.bits() as usize);
+            crate::sbi::console_putstr(" (");
+            if pte_flags.contains(PTEFlags::R) { crate::sbi::console_putstr("R"); }
+            if pte_flags.contains(PTEFlags::W) { crate::sbi::console_putstr("W"); }
+            if pte_flags.contains(PTEFlags::X) { crate::sbi::console_putstr("X"); }
+            if pte_flags.contains(PTEFlags::U) { crate::sbi::console_putstr("U"); }
+            crate::sbi::console_putstr(")\n");
+        }
         
         // Check if page is already mapped
         if let Some((existing_ppn, existing_flags)) = page_table.translate(vpn) {
@@ -255,6 +273,11 @@ impl MapArea {
                 } else {
                     // Allocate a new frame
                     let frame = FRAME_ALLOCATOR.alloc().expect("Failed to allocate frame");
+                    // CRITICAL: Clear the frame to ensure no garbage data
+                    let frame_va = frame.addr().0;
+                    unsafe {
+                        core::ptr::write_bytes(frame_va as *mut u8, 0, PAGE_SIZE);
+                    }
                     self.data_frames.insert(vpn, FrameTracker::new(frame));
                     frame
                 }
@@ -474,15 +497,40 @@ impl MapArea {
             crate::trap::print_hex_usize(kernel_va + data_start_in_page);
             crate::sbi::console_putstr("\n");
             
+            // Debug: print source data (first 4 bytes)
+            crate::sbi::console_putstr("[copy_data] Source data[0..");
+            crate::trap::print_hex_usize(src.len().min(4));
+            crate::sbi::console_putstr("]=");
+            for i in 0..src.len().min(4) {
+                crate::sbi::console_putstr(" 0x");
+                crate::trap::print_hex_usize(src[i] as usize);
+            }
+            crate::sbi::console_putstr("\n");
+            
             unsafe {
                 core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
             }
             
+            // Verify: read back the first 4 bytes
+            unsafe {
+                let verify_ptr = (kernel_va + data_start_in_page) as *const u32;
+                let verify = core::ptr::read(verify_ptr);
+                crate::sbi::console_putstr("[copy_data] After copy, first 4 bytes at PA=0x");
+                crate::trap::print_hex_usize(kernel_va + data_start_in_page);
+                crate::sbi::console_putstr(": 0x");
+                crate::trap::print_hex_usize(verify as usize);
+                crate::sbi::console_putstr("\n");
+            }
+            
             crate::sbi::console_putstr("[copy_data] Copy completed for VPN=0x");
             crate::trap::print_hex_usize(current_vpn.0);
-            crate::sbi::console_putstr("\n");
+            crate::sbi::console_putstr(", copied ");
+            crate::trap::print_hex_usize(src.len());
+            crate::sbi::console_putstr(" bytes\n");
             
-            start += PAGE_SIZE;
+            // CRITICAL FIX: increment start by actual bytes copied, not PAGE_SIZE
+            // This ensures we don't skip data when file_size < PAGE_SIZE
+            start += src.len();
             if start >= len {
                 break;
             }
@@ -494,16 +542,33 @@ impl MapArea {
 }
 
 /// Memory set
+/// 
+/// - Page table root should be allocated from frame allocator
+/// - Store the physical page number (PPN) of the root page table
+/// - Access page table through PPN (using identity mapping: PA == VA)
 pub struct MemorySet {
-    page_table: PageTable,
+    /// Physical page number of the page table root
+    /// The page table is stored in this physical frame
+    root_ppn: PhysPageNum,
     areas: Vec<MapArea>,
 }
 
 impl MemorySet {
     /// Create a new empty memory set
     pub fn new_bare() -> Self {
+        // Allocate a physical frame for page table root
+        let root_ppn = FRAME_ALLOCATOR.alloc().expect("Failed to allocate frame for page table root");
+        
+        // Get pointer to the physical frame (kernel uses identity mapping, so PA == VA)
+        let page_table_ptr = root_ppn.as_ptr::<PageTable>();
+        
+        // Initialize the page table in the allocated frame
+        unsafe {
+            (*page_table_ptr).clear();
+        }
+        
         Self {
-            page_table: PageTable::new(),
+            root_ppn,
             areas: Vec::new(),
         }
     }
@@ -700,7 +765,7 @@ impl MemorySet {
         let pte_flags = PTEFlags::V | PTEFlags::R | PTEFlags::X; // R-X for trampoline code
         
         // Map the page directly
-        memory_set.page_table.map(trampoline_vpn, trampoline_frame, pte_flags)
+        memory_set.page_table_mut().map(trampoline_vpn, trampoline_frame, pte_flags)
             .expect("Failed to map TRAMPOLINE page");
         
         // Copy trampoline code to the mapped page
@@ -747,10 +812,10 @@ impl MemorySet {
         }
         crate::sbi::console_putstr("\n");
         
-        map_area.map(&mut self.page_table);
+        map_area.map(self.page_table_mut());
         
         if let Some(data) = data {
-            map_area.copy_data(&self.page_table, data);
+            map_area.copy_data(self.page_table(), data);
         }
         
         self.areas.push(map_area);
@@ -758,7 +823,7 @@ impl MemorySet {
     
     /// Activate this memory set (write satp register)
     pub fn activate(&self) {
-        let satp = self.page_table.as_ppn().as_usize() | (8usize << 60);
+        let satp = self.root_ppn.as_usize() | (8usize << 60);
         unsafe {
             asm!("csrw satp, {}", in(reg) satp);
             asm!("sfence.vma");
@@ -767,16 +832,32 @@ impl MemorySet {
     
     /// Translate a virtual address to physical address
     pub fn translate(&self, va: usize) -> Option<usize> {
+        self.translate_with_debug(va, false)
+    }
+    
+    /// Translate a virtual address to physical address with optional debug output
+    /// 
+    /// # Arguments
+    /// * `va` - Virtual address to translate
+    /// * `debug` - If true, print root page table contents when accessing it
+    pub fn translate_with_debug(&self, va: usize, debug: bool) -> Option<usize> {
         let vpn = VirtAddr::new(va).page_number();
         let offset = VirtAddr::new(va).page_offset();
-        self.page_table
-            .translate(vpn)
+        let page_table = self.page_table();
+        page_table
+            .translate_with_debug(vpn, debug)
             .map(|(ppn, _)| ppn.addr().0 + offset)
+    }
+    
+    /// Print root page table contents for debugging
+    pub fn print_root_table(&self) {
+        let page_table = self.page_table();
+        page_table.print_root_table();
     }
     
     /// Get page table token (satp value)
     pub fn token(&self) -> usize {
-        self.page_table.as_ppn().as_usize() | (8usize << 60)
+        self.root_ppn.as_usize() | (8usize << 60)
     }
     
     /// Remove a map area from memory set
@@ -784,7 +865,8 @@ impl MemorySet {
     pub fn remove_area(&mut self, area_index: usize) {
         if area_index < self.areas.len() {
             let mut area = self.areas.remove(area_index);
-            area.unmap(&mut self.page_table);
+            let page_table = self.page_table_mut();
+            area.unmap(page_table);
             // FrameTracker will automatically deallocate frames when dropped
         }
     }
@@ -794,19 +876,22 @@ impl MemorySet {
     pub fn clear_areas(&mut self) {
         // Unmap all areas in reverse order to avoid issues
         while let Some(mut area) = self.areas.pop() {
-            area.unmap(&mut self.page_table);
+            let page_table = self.page_table_mut();
+            area.unmap(page_table);
             // FrameTracker will automatically deallocate frames when dropped
         }
     }
     
     /// Get a reference to the page table (for advanced operations)
+    /// Access page table through root_ppn using identity mapping
     pub fn page_table(&self) -> &PageTable {
-        &self.page_table
+        unsafe { &*self.root_ppn.as_ptr::<PageTable>() }
     }
     
     /// Get a mutable reference to the page table (for advanced operations)
+    /// Access page table through root_ppn using identity mapping
     pub fn page_table_mut(&mut self) -> &mut PageTable {
-        &mut self.page_table
+        unsafe { &mut *self.root_ppn.as_ptr::<PageTable>() }
     }
     
     /// Get a reference to the areas vector (for inspection)
@@ -837,7 +922,8 @@ impl MemorySet {
             );
             
             // Map the new area
-            new_area.map(&mut new_memory_set.page_table);
+            let page_table = new_memory_set.page_table_mut();
+            new_area.map(page_table);
             
             // If it's a framed mapping, copy the data
             if area.map_type() == MapType::Framed {
@@ -848,9 +934,11 @@ impl MemorySet {
                 let mut current_vpn = start_vpn;
                 while current_vpn.0 < end_vpn.0 {
                     // Get source page (from old address space)
-                    if let Some((src_ppn, _)) = self.page_table.translate(current_vpn) {
+                    let src_page_table = self.page_table();
+                    if let Some((src_ppn, _)) = src_page_table.translate(current_vpn) {
                         // Get destination page (from new address space)
-                        if let Some((dst_ppn, _)) = new_memory_set.page_table.translate(current_vpn) {
+                        let dst_page_table = new_memory_set.page_table();
+                        if let Some((dst_ppn, _)) = dst_page_table.translate(current_vpn) {
                             // Copy page data
                             let src_ptr = src_ppn.as_ptr::<u8>();
                             let dst_ptr = dst_ppn.as_ptr::<u8>();
@@ -905,7 +993,7 @@ impl MemorySet {
         let pte_flags = PTEFlags::V | PTEFlags::R | PTEFlags::X; // R-X for trampoline code
         
         // Map the page directly
-        memory_set.page_table.map(trampoline_vpn, trampoline_frame, pte_flags)
+        memory_set.page_table_mut().map(trampoline_vpn, trampoline_frame, pte_flags)
             .expect("Failed to map TRAMPOLINE page");
         
         // Copy trampoline code to the mapped page
@@ -981,15 +1069,28 @@ impl MemorySet {
                 // Determine page permissions from ELF segment flags
                 let mut perm = MapPermission::U; // User mode access
                 let flags = ph.flags();
-                if flags.is_read() {
+                let is_read = flags.is_read();
+                let is_write = flags.is_write();
+                let is_execute = flags.is_execute();
+                
+                if is_read {
                     perm |= MapPermission::R;
                 }
-                if flags.is_write() {
+                if is_write {
                     perm |= MapPermission::W;
                 }
-                if flags.is_execute() {
+                if is_execute {
                     perm |= MapPermission::X;
                 }
+                
+                // Debug: print segment information
+                crate::println!("[ELF] Segment {}: vaddr=0x{:x}, mem_size={}, file_size={}, flags: R={} W={} X={}, perm: R={} W={} X={} U={}",
+                    i, start_va, mem_size, file_size,
+                    is_read, is_write, is_execute,
+                    perm.contains(MapPermission::R),
+                    perm.contains(MapPermission::W),
+                    perm.contains(MapPermission::X),
+                    perm.contains(MapPermission::U));
                 
                 // Extract segment data from ELF file
                 // The ELF file structure is preserved - we just read the segment content
@@ -998,6 +1099,17 @@ impl MemorySet {
                 } else {
                     &[]
                 };
+                
+                // Debug: print first few bytes of code segments
+                if is_execute && segment_data.len() >= 4 {
+                    crate::sbi::console_putstr("[ELF] Code segment first 4 bytes: ");
+                    for i in 0..4 {
+                        crate::sbi::console_putstr("0x");
+                        crate::trap::print_hex_usize(segment_data[i] as usize);
+                        crate::sbi::console_putstr(" ");
+                    }
+                    crate::sbi::console_putstr("\n");
+                }
                 
                 // Create MapArea for this segment (段)
                 // Use actual_start_va (vaddr) to preserve segment offset for proper data placement
@@ -1036,6 +1148,6 @@ impl Drop for MemorySet {
         // Note: We don't deallocate the root page table itself here,
         // as it might be allocated on the stack or in a special way
         // The root page table should be deallocated by the caller if needed
-        self.page_table.dealloc_intermediate_tables();
+        self.page_table_mut().dealloc_intermediate_tables();
     }
 }

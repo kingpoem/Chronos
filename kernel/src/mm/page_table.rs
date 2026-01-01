@@ -269,10 +269,26 @@ impl PageTable {
 
     /// Translate virtual page number to physical page number
     pub fn translate(&self, vpn: VirtPageNum) -> Option<(PhysPageNum, PTEFlags)> {
+        self.translate_with_debug(vpn, false)
+    }
+    
+    /// Translate virtual page number to physical page number with optional debug output
+    /// 
+    /// # Arguments
+    /// * `vpn` - Virtual page number to translate
+    /// * `debug` - If true, print root page table contents when accessing it
+    pub fn translate_with_debug(&self, vpn: VirtPageNum, debug: bool) -> Option<(PhysPageNum, PTEFlags)> {
         let indexes = vpn.indexes();
         let mut current_table = self as *const PageTable;
+        let mut is_root = true;  // Track if we're accessing root page table
 
         for &index in indexes.iter().take(2) {
+            // Print root page table contents if debug is enabled and this is the first access
+            if debug && is_root {
+                self.print_root_table();
+                is_root = false;
+            }
+            
             let entry = unsafe { (*current_table).entry(index) };
 
             if !entry.is_valid() {
@@ -292,6 +308,62 @@ impl PageTable {
         } else {
             None
         }
+    }
+    
+    /// Print root page table (Level 2) contents for debugging
+    /// This prints all valid entries in the root page table
+    pub fn print_root_table(&self) {
+        crate::sbi::console_putstr("\n[PageTable] Root page table (Level 2) contents:\n");
+        crate::sbi::console_putstr("[PageTable] Root PPN: 0x");
+        crate::trap::print_hex_usize(self.as_ppn().as_usize());
+        crate::sbi::console_putstr("\n");
+        
+        let mut valid_count = 0;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.is_valid() {
+                valid_count += 1;
+                let ppn = entry.ppn();
+                let flags = entry.flags();
+                let is_leaf = entry.is_leaf();
+                
+                crate::sbi::console_putstr("  [");
+                crate::trap::print_hex_usize(index);
+                crate::sbi::console_putstr("] PPN=0x");
+                crate::trap::print_hex_usize(ppn.as_usize());
+                crate::sbi::console_putstr(" Flags=");
+                
+                if flags.contains(PTEFlags::V) {
+                    crate::sbi::console_putstr("V");
+                }
+                if flags.contains(PTEFlags::R) {
+                    crate::sbi::console_putstr("R");
+                }
+                if flags.contains(PTEFlags::W) {
+                    crate::sbi::console_putstr("W");
+                }
+                if flags.contains(PTEFlags::X) {
+                    crate::sbi::console_putstr("X");
+                }
+                if flags.contains(PTEFlags::U) {
+                    crate::sbi::console_putstr("U");
+                }
+                if flags.contains(PTEFlags::G) {
+                    crate::sbi::console_putstr("G");
+                }
+                
+                if is_leaf {
+                    crate::sbi::console_putstr(" [LEAF: 1GB page]");
+                } else {
+                    crate::sbi::console_putstr(" [-> Level 1]");
+                }
+                
+                crate::sbi::console_putstr("\n");
+            }
+        }
+        
+        crate::sbi::console_putstr("[PageTable] Total valid entries in root: ");
+        crate::trap::print_hex_usize(valid_count);
+        crate::sbi::console_putstr(" / 512\n");
     }
 
     /// Get the physical address of this page table
