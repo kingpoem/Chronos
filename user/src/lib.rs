@@ -85,7 +85,7 @@ pub const MAP_FIXED: usize = 0x10;
 pub const MAP_FAILED: isize = -1;
 
 /// Map memory region
-/// 
+///
 /// # Arguments
 /// * `addr` - Suggested virtual address (0 means let kernel choose)
 /// * `length` - Size of mapping in bytes
@@ -93,7 +93,7 @@ pub const MAP_FAILED: isize = -1;
 /// * `flags` - Mapping flags (MAP_PRIVATE, MAP_SHARED, MAP_ANONYMOUS, MAP_FIXED)
 /// * `fd` - File descriptor (ignored for anonymous mappings, use -1)
 /// * `offset` - File offset (ignored for anonymous mappings, use 0)
-/// 
+///
 /// # Returns
 /// * Success: Virtual address of mapped region
 /// * Failure: MAP_FAILED (-1)
@@ -109,11 +109,11 @@ pub fn sys_mmap(
 }
 
 /// Unmap memory region
-/// 
+///
 /// # Arguments
 /// * `addr` - Virtual address of mapped region (must be page-aligned)
 /// * `length` - Size of region to unmap in bytes
-/// 
+///
 /// # Returns
 /// * Success: 0
 /// * Failure: -1
@@ -121,36 +121,44 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
     syscall_6(SYS_MUNMAP, addr, length, 0, 0, 0, 0)
 }
 
-/// Print string
+/// Console writer for implementing core::fmt::Write
+struct Stdout;
+
+impl core::fmt::Write for Stdout {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        sys_write(1, s.as_bytes());
+        Ok(())
+    }
+}
+
+/// Print string to stdout
 pub fn print(s: &str) {
     sys_write(1, s.as_bytes());
 }
 
-/// Print string with newline
-pub fn println(s: &str) {
-    print(s);
-    print("\n");
+/// Print formatted string to stdout
+pub fn _print(args: core::fmt::Arguments) {
+    use core::fmt::Write;
+    Stdout.write_fmt(args).unwrap();
 }
 
-/// Print number
-pub fn print_num(n: usize) {
-    if n == 0 {
-        print("0");
-        return;
-    }
-    let mut num = n;
-    let mut digits = [0u8; 20];
-    let mut i = 0;
-    while num > 0 {
-        digits[i] = (num % 10) as u8 + b'0';
-        num /= 10;
-        i += 1;
-    }
-    for j in (0..i).rev() {
-        let mut buf = [0u8; 1];
-        buf[0] = digits[j];
-        sys_write(1, &buf);
-    }
+/// Print macro (like std::print!)
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => {
+        $crate::_print(core::format_args!($($arg)*))
+    };
+}
+
+/// Println macro (like std::println!)
+#[macro_export]
+macro_rules! println {
+    () => {
+        $crate::print!("\n")
+    };
+    ($($arg:tt)*) => {
+        $crate::print!("{}\n", core::format_args!($($arg)*))
+    };
 }
 
 #[no_mangle]
@@ -164,4 +172,3 @@ pub extern "C" fn _start() -> ! {
     }
     sys_exit(0)
 }
-

@@ -8,8 +8,12 @@ name = "user_lib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "hello_world"
-path = "src/bin/hello_world.rs"
+name = "00poweroff"
+path = "src/bin/00poweroff.rs"
+
+[[bin]]
+name = "01hello"
+path = "src/bin/01hello.rs"
 
 [[bin]]
 name = "power_3"
