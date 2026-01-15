@@ -1,5 +1,4 @@
 fn main() {
     println!("cargo:rerun-if-changed=src/link_app.S");
-    println!("cargo:rerun-if-changed=../user/target/riscv64gc-unknown-none-elf/release/00poweroff");
-    println!("cargo:rerun-if-changed=../user/target/riscv64gc-unknown-none-elf/release/01hello");
+    println!("cargo:rerun-if-changed=../user/target/riscv64gc-unknown-none-elf/release/");
 }

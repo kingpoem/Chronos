@@ -1,115 +1,167 @@
 #![no_std]
 #![feature(linkage)]
-#![feature(panic_info_message)]
+#![no_main]
+
+mod lang_items;
 
 use core::arch::asm;
 
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => ({
-        // Using $crate to refer to the current crate is required
-        // when the macro is exported and used in other crates
-        $crate::console::print(format_args!($($arg)*));
-    });
+/// System call numbers
+pub const SYS_WRITE: usize = 64;
+pub const SYS_EXIT: usize = 93;
+pub const SYS_YIELD: usize = 124;
+pub const SYS_GET_TIME: usize = 169;
+pub const SYS_MMAP: usize = 222;
+pub const SYS_MUNMAP: usize = 215;
+
+/// System call wrapper functions
+
+#[inline(always)]
+fn syscall_3(id: usize, args: [usize; 3]) -> isize {
+    let mut ret: isize;
+    unsafe {
+        asm!(
+            "ecall",
+            inlateout("a0") args[0] => ret,
+            in("a1") args[1],
+            in("a2") args[2],
+            in("a7") id,
+        );
+    }
+    ret
 }
 
-#[macro_export]
-macro_rules! println {
-    ($fmt:literal $(, $($arg:tt)*)?) => {
-        $crate::print!(concat!($fmt, "\n") $(, $($arg)*)?);
+#[inline(always)]
+fn syscall_6(id: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize) -> isize {
+    let mut ret: isize;
+    unsafe {
+        asm!(
+            "ecall",
+            inlateout("a0") a0 => ret,
+            in("a1") a1,
+            in("a2") a2,
+            in("a3") a3,
+            in("a4") a4,
+            in("a5") a5,
+            in("a7") id,
+        );
     }
+    ret
 }
 
-pub mod console {
-    use core::fmt::{self, Write};
+/// Write to console
+pub fn sys_write(fd: usize, buf: &[u8]) -> isize {
+    syscall_3(SYS_WRITE, [fd, buf.as_ptr() as usize, buf.len()])
+}
 
-    struct Stdout;
+/// Exit with code
+pub fn sys_exit(exit_code: i32) -> ! {
+    syscall_3(SYS_EXIT, [exit_code as usize, 0, 0]);
+    unreachable!()
+}
 
-    impl Write for Stdout {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            // syscall 64 is write, fd 1 is stdout
-            let buffer = s.as_bytes();
-            unsafe {
-                super::syscall(64, 1, buffer.as_ptr() as usize, buffer.len());
-            }
-            Ok(())
-        }
+/// Yield CPU
+pub fn sys_yield() -> isize {
+    syscall_3(SYS_YIELD, [0, 0, 0])
+}
+
+/// Get time in microseconds
+pub fn sys_get_time() -> isize {
+    syscall_3(SYS_GET_TIME, [0, 0, 0])
+}
+
+/// Protection flags for mmap
+pub const PROT_READ: usize = 0x1;
+pub const PROT_WRITE: usize = 0x2;
+pub const PROT_EXEC: usize = 0x4;
+
+/// Mapping flags for mmap
+pub const MAP_PRIVATE: usize = 0x02;
+pub const MAP_SHARED: usize = 0x01;
+pub const MAP_ANONYMOUS: usize = 0x20;
+pub const MAP_FIXED: usize = 0x10;
+
+/// Error return value for mmap
+pub const MAP_FAILED: isize = -1;
+
+/// Map memory region
+/// 
+/// # Arguments
+/// * `addr` - Suggested virtual address (0 means let kernel choose)
+/// * `length` - Size of mapping in bytes
+/// * `prot` - Protection flags (PROT_READ, PROT_WRITE, PROT_EXEC)
+/// * `flags` - Mapping flags (MAP_PRIVATE, MAP_SHARED, MAP_ANONYMOUS, MAP_FIXED)
+/// * `fd` - File descriptor (ignored for anonymous mappings, use -1)
+/// * `offset` - File offset (ignored for anonymous mappings, use 0)
+/// 
+/// # Returns
+/// * Success: Virtual address of mapped region
+/// * Failure: MAP_FAILED (-1)
+pub fn sys_mmap(
+    addr: usize,
+    length: usize,
+    prot: usize,
+    flags: usize,
+    fd: usize,
+    offset: usize,
+) -> isize {
+    syscall_6(SYS_MMAP, addr, length, prot, flags, fd, offset)
+}
+
+/// Unmap memory region
+/// 
+/// # Arguments
+/// * `addr` - Virtual address of mapped region (must be page-aligned)
+/// * `length` - Size of region to unmap in bytes
+/// 
+/// # Returns
+/// * Success: 0
+/// * Failure: -1
+pub fn sys_munmap(addr: usize, length: usize) -> isize {
+    syscall_6(SYS_MUNMAP, addr, length, 0, 0, 0, 0)
+}
+
+/// Print string
+pub fn print(s: &str) {
+    sys_write(1, s.as_bytes());
+}
+
+/// Print string with newline
+pub fn println(s: &str) {
+    print(s);
+    print("\n");
+}
+
+/// Print number
+pub fn print_num(n: usize) {
+    if n == 0 {
+        print("0");
+        return;
     }
-
-    pub fn print(args: fmt::Arguments) {
-        Stdout.write_fmt(args).unwrap();
+    let mut num = n;
+    let mut digits = [0u8; 20];
+    let mut i = 0;
+    while num > 0 {
+        digits[i] = (num % 10) as u8 + b'0';
+        num /= 10;
+        i += 1;
+    }
+    for j in (0..i).rev() {
+        let mut buf = [0u8; 1];
+        buf[0] = digits[j];
+        sys_write(1, &buf);
     }
 }
 
 #[no_mangle]
 #[link_section = ".text.entry"]
 pub extern "C" fn _start() -> ! {
-    clear_bss();
-    exit(main());
-    panic!("unreachable after sys_exit!");
-}
-
-#[linkage = "weak"]
-#[no_mangle]
-fn main() -> i32 {
-    panic!("Cannot find main!");
-}
-
-fn clear_bss() {
     extern "C" {
-        fn start_bss();
-        fn end_bss();
+        fn main();
     }
-    (start_bss as usize..end_bss as usize).for_each(|addr| unsafe {
-        (addr as *mut u8).write_volatile(0);
-    });
-}
-
-use core::panic::PanicInfo;
-
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    if let Some(location) = info.location() {
-        println!(
-            "Panicked at {}:{} {}",
-            location.file(),
-            location.line(),
-            info.message()
-        );
-    } else {
-        println!("Panicked: {}", info.message());
-    }
-    exit(-1);
-    loop {}
-}
-
-// System calls
-pub fn syscall(id: usize, args0: usize, args1: usize, args2: usize) -> isize {
-    let mut ret: isize;
     unsafe {
-        asm!(
-            "ecall",
-            inlateout("x10") args0 => ret,
-            in("x11") args1,
-            in("x12") args2,
-            in("x17") id,
-        );
+        main();
     }
-    ret
+    sys_exit(0)
 }
 
-pub fn exit(exit_code: i32) -> isize {
-    syscall(93, exit_code as usize, 0, 0)
-}
-
-pub fn write(fd: usize, buffer: &[u8]) -> isize {
-    syscall(64, fd, buffer.as_ptr() as usize, buffer.len())
-}
-
-pub fn yield_() -> isize {
-    syscall(124, 0, 0, 0)
-}
-
-pub fn get_time() -> isize {
-    syscall(169, 0, 0, 0)
-}

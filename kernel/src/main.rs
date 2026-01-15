@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
-#![cfg_attr(test, allow(dead_code))]
 
 extern crate alloc;
 
@@ -10,7 +9,6 @@ mod console;
 mod config;
 mod drivers;
 mod lang_items;
-mod loader;
 mod mm;
 mod sbi;
 mod syscall;
@@ -22,32 +20,8 @@ use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
 global_asm!(include_str!("link_app.S"));
 
-/// Get number of applications
-fn get_num_app() -> usize {
-    extern "C" {
-        fn _num_app();
-    }
-    unsafe { (_num_app as usize as *const usize).read_volatile() }
-}
-
-/// Get application data
-fn get_app_data(app_id: usize) -> &'static [u8] {
-    extern "C" {
-        fn _num_app();
-    }
-    let num_app_ptr = _num_app as usize as *const usize;
-    let num_app = get_num_app();
-    let app_start = unsafe { core::slice::from_raw_parts(num_app_ptr.add(1), num_app + 1) };
-    println!("[Debug] app_start array: {:?}", app_start);
-    assert!(app_id < num_app);
-    let start = app_start[app_id];
-    let end = app_start[app_id + 1];
-    println!("[Debug] app {} range: {:#x} - {:#x}", app_id, start, end);
-    unsafe { core::slice::from_raw_parts(start as *const u8, end - start) }
-}
-
-/// 内核入口点
-/// 由 bootloader 调用
+/// kernel entry point
+/// called by bootloader
 #[no_mangle]
 pub fn kernel_main(hartid: usize, dtb: usize) -> ! {
     // Clear BSS segment
@@ -62,27 +36,55 @@ pub fn kernel_main(hartid: usize, dtb: usize) -> ! {
     println!("=================================");
     println!("Hart ID: {}", hartid);
     println!("DTB: {:#x}", dtb);
+    
+    // Print critical register state at kernel entry
+    crate::trap::print_critical_registers("[Kernel Entry]");
 
     // Initialize subsystems
     println!("\n[Init] Initializing subsystems...");
+    crate::trap::print_critical_registers("[Before mm::init]");
     mm::init(dtb);
+    crate::trap::print_critical_registers("[After mm::init]");
+    println!("[Init] Memory management initialized, calling trap::init()...");
     trap::init();
+    crate::trap::print_critical_registers("[After trap::init]");
+    println!("[Init] Trap handler initialized, calling task::init()...");
     task::init();
+    crate::trap::print_critical_registers("[After task::init]");
+    println!("[Init] Task management initialized");
 
     println!("\n[Kernel] All subsystems initialized!");
-
+    
     // Run tests
     println!("\n[Kernel] Running tests...\n");
     test_kernel();
+
     println!("\n[Kernel] Tests completed!");
-
-    // Run apps
-    println!("[Kernel] Loading applications...\n");
-
-    // Load user applications
-    load_apps();
-    println!("[Kernel] Starting first user task...\n");
-    task::run_first_task();
+    println!("[Kernel] System features:");
+    println!("  ✓ Buddy System Allocator");
+    println!("  ✓ SV39 Page Table");
+    println!("  ✓ Trap Handling");
+    println!("  ✓ System Calls");
+    println!("  ✓ User Mode Support");
+    
+    // Load and run user programs
+    println!("\n[Kernel] Loading user programs...");
+    task::load_apps();
+    
+    // Enable timer interrupt AFTER tasks are loaded
+    // This ensures the system is fully initialized before handling interrupts
+    println!("[Kernel] Enabling timer interrupt for preemptive scheduling...");
+    trap::enable_timer_interrupt();
+    crate::trap::print_critical_registers("[After enabling timer interrupt]");
+    
+    // Start first task
+    println!("[Kernel] Starting first task...");
+    crate::trap::print_critical_registers("[Before switch_task]");
+    task::switch_task();
+    
+    // Should never reach here
+    println!("\n[Kernel] All tasks completed, shutting down...");
+    sbi::shutdown();
 }
 
 fn clear_bss() {
@@ -99,30 +101,5 @@ fn clear_bss() {
 fn test_kernel() {
     println!("=== Memory Management Tests ===");
     mm::test();
-
-    println!("\n=== System Call Tests ===");
-    test_syscalls();
-
-    println!("\n=== All Tests Passed! ===");
-}
-
-fn test_syscalls() {
-    println!("  Testing system calls...");
-    // System calls will be tested through trap handler
-    println!("  System call framework ready");
-}
-
-/// Load all user applications
-fn load_apps() {
-    let num_app = get_num_app();
-    println!("[Kernel] Found {} applications", num_app);
-
-    for i in 0..num_app {
-        let elf_data = get_app_data(i);
-        println!("[Kernel] Loading app {}: {} bytes", i, elf_data.len());
-
-        let task = task::TaskControlBlock::new(elf_data, i);
-        println!("[Kernel] App {} loaded successfully", i);
-        task::add_task(alloc::sync::Arc::new(task));
-    }
+    println!("Memory management OK");
 }

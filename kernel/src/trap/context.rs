@@ -1,58 +1,77 @@
-//! Trap context for user-kernel transitions
+use riscv::register::sstatus::{self, Sstatus};
 
-use riscv::register::sstatus::{Sstatus, SPP};
-
-/// Trap context saved on trap entry
 #[repr(C)]
 pub struct TrapContext {
-    /// General registers x0..x31
     pub x: [usize; 32],
-    /// Supervisor status register (stored as usize for alignment)
-    pub sstatus: usize,
-    /// Supervisor exception program counter
+    pub sstatus: Sstatus,
     pub sepc: usize,
-    /// Kernel satp (page table)
-    pub kernel_satp: usize,
-    /// Kernel stack pointer
-    pub kernel_sp: usize,
-    /// Trap handler entry point
-    pub trap_handler: usize,
+    // Store user satp for address space switching in __restore
+    pub user_satp: usize,
 }
 
 impl TrapContext {
-    /// Initialize trap context for a new app
-    pub fn app_init_context(
-        entry: usize,
-        sp: usize,
-        kernel_satp: usize,
-        kernel_sp: usize,
-        trap_handler: usize,
-    ) -> Self {
-        // We need to manually construct an sstatus value with SPP=User
-        // SPP is bit 8: 0 = User, 1 = Supervisor
-        // SPIE is bit 5: 1 = enable interrupts when returning
-        // SUM is bit 18: 0 = kernel cannot access user pages (correct for security)
-        let sstatus_bits: usize = 1 << 5; // SPIE=1, SPP=0, SUM=0
+    pub fn set_sp(&mut self, sp: usize) {
+        self.x[2] = sp;
+    }
+    
+    pub fn user_init_context(entry: usize, sp: usize) -> Self {
+        let sstatus = sstatus::read();
+        unsafe {
+            sstatus::set_spp(sstatus::SPP::User);
+        }
 
         let mut cx = Self {
             x: [0; 32],
-            sstatus: sstatus_bits,
+            sstatus,
             sepc: entry,
-            kernel_satp,
-            kernel_sp,
-            trap_handler,
+            user_satp: 0,
         };
         cx.set_sp(sp);
         cx
     }
-
-    /// Set stack pointer (x2)
-    pub fn set_sp(&mut self, sp: usize) {
-        self.x[2] = sp;
+    
+    /// Initialize trap context for app (with kernel token and stack)
+    pub fn app_init_context(
+        entry: usize,
+        user_sp: usize,
+        _kernel_satp: usize,
+        _kernel_sp: usize,
+        _trap_handler: usize,
+    ) -> Self {
+        // Read current sstatus and create a new one with SPP set to User and SIE enabled
+        // According to rCore implementation: use set_spp and set_sie, then read
+        // CRITICAL: This function assumes interrupts are disabled and timer is NOT set
+        // The caller must ensure these conditions before calling this function
+        let sstatus_val = unsafe {
+            // Save original sstatus bits
+            let original_bits: usize;
+            core::arch::asm!("csrr {}, sstatus", out(reg) original_bits);
+            
+            // Set SPP to User and SIE to enabled (modifies actual register)
+            // This is the rCore way: modify register to get the value we want
+            // NOTE: This will temporarily enable interrupts, so timer must NOT be set
+            sstatus::set_spp(sstatus::SPP::User);
+            sstatus::set_sie();
+            let result = sstatus::read(); // Read the modified value
+            
+            // CRITICAL: Restore original sstatus immediately
+            // Use inline assembly for fastest possible restoration
+            core::arch::asm!("csrw sstatus, {}", in(reg) original_bits);
+            
+            result
+        };
+        
+        let mut cx = Self {
+            x: [0; 32],
+            sstatus: sstatus_val, // SPP is set to User, SIE is enabled
+            sepc: entry,
+            user_satp: 0,  // Will be set when task is created
+        };
+        cx.set_sp(user_sp);
+        
+        // NOTE: sscratch will be set when we actually switch to the task
+        // Don't set it here to avoid side effects during task creation
+        
+        cx
     }
-}
-
-/// Trap handler function (will be called from assembly)
-fn trap_handler() -> ! {
-    crate::trap::trap_from_user();
 }

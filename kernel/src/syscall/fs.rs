@@ -1,35 +1,74 @@
-use crate::print;
+//! File system related system calls
+//!
+//! Implements file system operations like read, write, etc.
+
+use crate::task::TASK_MANAGER;
 
 const FD_STDOUT: usize = 1;
 
+/// Write to a file descriptor
+/// 
+/// # Arguments
+/// * `fd` - File descriptor
+/// * `buf` - Buffer pointer (user virtual address)
+/// * `len` - Length of buffer in bytes
+/// 
+/// # Returns
+/// * Number of bytes written, or -1 on error
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     match fd {
         FD_STDOUT => {
-            // Get current task to translate user space address
-            let task = crate::task::current_task().expect("No current task in sys_write");
-            let inner = task.inner_exclusive_access();
-            
-            // Translate the user buffer address to kernel accessible memory
-            // We need to copy the data from user space to kernel space
-            let mut kernel_buf = alloc::vec::Vec::with_capacity(len);
-            for i in 0..len {
-                let user_va = (buf as usize) + i;
-                if let Some(phys_addr) = inner.memory_set.translate(user_va) {
-                    let byte = unsafe { *(phys_addr as *const u8) };
-                    kernel_buf.push(byte);
-                } else {
-                    crate::println!("[syscall] Failed to translate user address {:#x}", user_va);
+            // Get current task's page table to translate user virtual address
+            let task_manager = TASK_MANAGER.lock();
+            let current_pid = match task_manager.get_current_task() {
+                Some(pid) => pid,
+                None => {
+                    crate::sbi::console_putstr("[sys_write] Error: No current task\n");
                     return -1;
                 }
-            }
-            drop(inner);
+            };
             
-            let str = core::str::from_utf8(&kernel_buf).unwrap();
-            print!("{}", str);
-            len as isize
+            let task = match task_manager.get_task(current_pid) {
+                Some(task) => task,
+                None => {
+                    crate::sbi::console_putstr("[sys_write] Error: Task not found\n");
+                    return -1;
+                }
+            };
+            
+            // Get user page table
+            let user_page_table = &task.memory_set.page_table();
+            
+            // Translate user virtual address to kernel virtual address
+            // This safely accesses user space data from kernel space
+            let user_va = buf as usize;
+            let buffers = user_page_table.translated_byte_buffer_readonly(user_va, len);
+            
+            drop(task_manager);
+            
+            // Write all buffers to console
+            let mut total_written = 0;
+            for buffer in buffers {
+                // Convert bytes to string and print
+                match core::str::from_utf8(buffer) {
+                    Ok(s) => {
+                        print!("{}", s);
+                        total_written += buffer.len();
+                    }
+                    Err(_) => {
+                        // If not valid UTF-8, print as raw bytes
+                        for &byte in buffer {
+                            crate::sbi::console_putchar(byte);
+                            total_written += 1;
+                        }
+                    }
+                }
+            }
+            
+            total_written as isize
         }
         _ => {
-            crate::println!("Unsupported fd in sys_write: {}", fd);
+            crate::sbi::console_putstr("[sys_write] Error: Unsupported fd\n");
             -1
         }
     }

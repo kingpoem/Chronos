@@ -1,7 +1,7 @@
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
-BASE_ADDRESS = 0x80220000;
+BASE_ADDRESS = 0x80200000;
 
 SECTIONS
 {
@@ -52,6 +52,11 @@ SECTIONS
     }
     . = ALIGN(4K);
     ekernel = .;
+
+    .data.apps : ALIGN(4K) {
+        *(.data.apps)
+        *(.data.app_*)
+    }
 
     /DISCARD/ : {
         *(.eh_frame)

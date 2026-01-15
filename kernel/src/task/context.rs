@@ -2,17 +2,16 @@
 //! 
 //! Defines the context structure for task switching
 
-use crate::trap::TrapContext;
 
 /// Task context for context switching
 #[repr(C)]
 pub struct TaskContext {
     /// Return address (ra)
-    ra: usize,
+    pub ra: usize,
     /// Stack pointer (sp)
-    sp: usize,
+    pub sp: usize,
     /// Saved registers s0-s11
-    s: [usize; 12],
+    pub s: [usize; 12],
 }
 
 impl TaskContext {
@@ -26,24 +25,15 @@ impl TaskContext {
     }
     
     /// Create a context that will jump to trap_return
+    /// The trap context should be prepared on kernel stack before calling __restore
     pub fn goto_trap_return(kstack_ptr: usize) -> Self {
         extern "C" {
-            fn trap_return();
+            fn __restore();
         }
         Self {
-            ra: trap_return as usize,
+            ra: __restore as *const () as usize,
             sp: kstack_ptr,
             s: [0; 12],
         }
-    }
-    
-    /// Get return address
-    pub fn ra(&self) -> usize {
-        self.ra
-    }
-    
-    /// Get stack pointer
-    pub fn sp(&self) -> usize {
-        self.sp
     }
 }

@@ -13,6 +13,12 @@ _start:
     .option norelax
     la sp, boot_stack_top
     .option pop
+    
+    # Save initial register state before calling kernel_main
+    # We'll print these in kernel_main
+    # sp is already set to boot_stack_top
+    # Save sp to a temporary register for later use
+    mv t0, sp
     call kernel_main
 
     .section .bss.stack
