@@ -43,12 +43,7 @@ fn get_app_data(app_id: usize) -> &'static [u8] {
     let start = app_start[app_id];
     let end = app_start[app_id + 1];
     println!("[Debug] app {} range: {:#x} - {:#x}", app_id, start, end);
-    unsafe {
-        core::slice::from_raw_parts(
-            start as *const u8,
-            end - start,
-        )
-    }
+    unsafe { core::slice::from_raw_parts(start as *const u8, end - start) }
 }
 
 /// 内核入口点
@@ -88,9 +83,6 @@ pub fn kernel_main(hartid: usize, dtb: usize) -> ! {
     load_apps();
     println!("[Kernel] Starting first user task...\n");
     task::run_first_task();
-
-    println!("\n[Kernel] Shutting down...");
-    sbi::shutdown();
 }
 
 fn clear_bss() {
