@@ -1,5 +1,7 @@
 # 内存管理系统实现总结
 
+> **注意**: 本文档描述 v0.1.0 的实现，v0.2.0 已升级使用 Buddy System Allocator 和 MemorySet。
+
 ## 🎉 完成情况
 
 已成功为 Chronos OS 实现了完整的内存管理系统！
