@@ -1,5 +1,101 @@
 # 变更日志
 
+## [0.2.0] - 2026-01-15
+
+### 新增功能 ✨
+
+#### 内存管理升级
+- **Buddy System Allocator** (`mm/heap.rs`)
+  - 使用 `buddy_system_allocator` crate 实现高效堆分配
+  - 支持 O(log n) 分配复杂度
+  - 替换原有的链表分配器
+
+- **地址空间管理** (`mm/memory_set.rs`)
+  - 完整的 MemorySet 实现
+  - 支持内核和用户地址空间
+  - MapArea 区域管理
+  - 支持按需分页和 COW (Copy-on-Write)
+
+#### 中断和异常处理
+- **Trap 处理框架** (`trap/`)
+  - `trap.S`: 完整的陷入入口/出口汇编代码
+  - `context.rs`: TrapContext 保存和恢复
+  - `mod.rs`: trap_handler 分发处理
+
+#### 系统调用
+- **系统调用框架** (`syscall/`)
+  - syscall 分发器 (`mod.rs`)
+  - 文件系统调用 (`fs.rs`): sys_write
+  - 内存系统调用 (`memory.rs`): sys_brk
+  - 进程调用 (`process.rs`): sys_exit, sys_yield, sys_get_time
+
+#### 任务管理
+- **任务管理系统** (`task/`)
+  - TCB (TaskControlBlock) 定义 (`task.rs`)
+  - 任务上下文 (`context.rs`)
+  - 上下文切换汇编 (`switch.S`, `switch.rs`)
+  - 任务调度器 (`manager.rs`, `scheduler.rs`)
+  - 程序加载器 (`loader.rs`)
+
+#### 用户态支持
+- **用户程序加载** (`loader/`)
+  - ELF 格式解析
+  - 用户程序加载到独立地址空间
+  - 用户态启动入口
+
+### 改进 🔧
+
+- 重构内核入口 (`main.rs`)
+- 添加 `link_app.S` 支持应用链接
+- 实现 SBI 定时器接口
+- 完善控制台输出
+
+### 文件统计 📊
+
+**新增/修改模块**:
+- `mm/memory_set.rs` (~1000 行)
+- `mm/page_table.rs` (~450 行)
+- `trap/trap.S` (~350 行)
+- `trap/mod.rs` (~250 行)
+- `task/` 完整模块 (~400 行)
+- `syscall/` 完整模块 (~200 行)
+- `loader/` 程序加载 (~150 行)
+
+**总代码量**: ~2,500 行 Rust + 汇编
+
+### 技术细节 🔬
+
+- **架构**: RISC-V 64-bit (RV64GC)
+- **内存模型**: SV39 (39-bit 虚拟地址)
+- **页大小**: 4KB
+- **物理内存**: 128MB
+- **堆分配器**: Buddy System (32 个分离子堆)
+- **任务状态**: Ready, Running, Zombie
+
+### 测试覆盖 ✅
+
+- ✅ 物理帧分配器
+- ✅ 页表管理
+- ✅ Buddy 堆分配
+- ✅ 系统调用框架
+- ✅ 任务上下文切换
+- ✅ 用户程序加载
+
+### 已知限制 ⚠️
+
+- 暂无时钟中断驱动的调度器
+- 文件系统尚未实现
+- 设备驱动不完整
+
+### 下一步计划 🎯
+
+- [ ] 实现时钟中断和抢占式调度
+- [ ] 添加文件系统支持
+- [ ] 完善设备驱动
+- [ ] 添加多核支持
+
+---
+
 ## [0.1.0] - 2025-12-19
 
 ### 新增功能 ✨
