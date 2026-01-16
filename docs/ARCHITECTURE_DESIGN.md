@@ -3,13 +3,13 @@
 > **文档版本**: v0.2.0
 > **最后更新**: 2026-01-15
 
-## 📋 概述
+## 概述
 
 Chronos OS 采用分层架构设计，从硬件抽象到用户应用，形成完整的操作系统栈。本文档描述了系统的整体架构和关键设计决策。
 
 ---
 
-## 🏗️ 系统架构
+## 系统架构
 
 ### 层次结构
 
@@ -55,7 +55,7 @@ Chronos OS 采用分层架构设计，从硬件抽象到用户应用，形成完
 
 ---
 
-## 📁 项目结构
+## 项目结构
 
 ### 当前结构
 
@@ -89,7 +89,7 @@ OS2025-Chronos/
 
 ---
 
-## 💾 内存布局
+## 内存布局
 
 ### 物理内存布局
 
@@ -125,7 +125,7 @@ OS2025-Chronos/
 
 ---
 
-## 🔧 关键模块设计
+## 关键模块设计
 
 ### 内存管理 (mm/)
 
@@ -191,7 +191,7 @@ Scheduler: FIFO 调度策略
 
 ---
 
-## 🔄 启动流程
+## 启动流程
 
 ### 1. RustSBI 阶段 (M-mode)
 
@@ -243,7 +243,7 @@ kernel_main(hartid, dtb)
 
 ---
 
-## 🎯 设计决策
+## 设计决策
 
 ### 1. 架构选择
 
@@ -281,7 +281,7 @@ kernel_main(hartid, dtb)
 
 ---
 
-## 🚀 性能优化
+## 性能优化
 
 ### 内存效率
 - Buddy 分配器减少碎片
@@ -300,7 +300,7 @@ kernel_main(hartid, dtb)
 
 ---
 
-## 🔒 安全特性
+## 安全特性
 
 ### 内存安全
 - Rust 编译期保证
@@ -319,7 +319,7 @@ kernel_main(hartid, dtb)
 
 ---
 
-## 📈 扩展性设计
+## 扩展性设计
 
 ### 模块化架构
 - 清晰的接口定义
@@ -338,7 +338,7 @@ kernel_main(hartid, dtb)
 
 ---
 
-## 🧪 测试策略
+## 测试策略
 
 ### 单元测试
 - 核心算法验证
@@ -357,7 +357,7 @@ kernel_main(hartid, dtb)
 
 ---
 
-## 📚 参考资料
+## 参考资料
 
 - [RISC-V Privileged Specification](https://riscv.org/technical/specifications/)
 - [rCore Tutorial Book](https://rcore-os.github.io/rCore-Tutorial-Book-v3/)
@@ -365,7 +365,7 @@ kernel_main(hartid, dtb)
 
 ---
 
-## 🎯 未来规划
+## 未来规划
 
 ### 短期优化
 - 完善调度器

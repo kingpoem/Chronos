@@ -1,12 +1,12 @@
 # Chronos OS - 文档索引
 
-## 🚀 快速开始
+## 快速开始
 
 - [README.md](../README.md) - 项目主文档
 - [QUICKREF.md](../QUICKREF.md) - 快速参考手册
 - [docs/QUICKSTART.md](QUICKSTART.md) - 快速开始指南
 
-## 📚 核心文档
+## 核心文档
 
 ### 项目概览
 - [PROJECT_STATUS_REPORT.md](PROJECT_STATUS_REPORT.md) - 项目状态报告
@@ -20,7 +20,7 @@
 - [MEMORY_MANAGEMENT.md](MEMORY_MANAGEMENT.md) - 内存管理系统
 - [USER_MODE_IMPLEMENTATION.md](USER_MODE_IMPLEMENTATION.md) - 用户态实现
 
-## 🔧 开发文档
+## 开发文档
 
 ### 构建与运行
 - [RUSTSBI_BUILD_PROCESS.md](RUSTSBI_BUILD_PROCESS.md) - RustSBI 构建流程
@@ -29,7 +29,7 @@
 - [MEMORY_SIZE_EXPLANATION.md](MEMORY_SIZE_EXPLANATION.md) - 内存配置说明
 - [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) - 实现总结
 
-## 📁 文档结构
+## 文档结构
 
 ```
 docs/
@@ -47,7 +47,7 @@ docs/
 └── IMPLEMENTATION_SUMMARY.md     # 实现总结
 ```
 
-## 🎯 阅读建议
+## 阅读建议
 
 ### 新手入门
 1. [README.md](../README.md) - 了解项目
