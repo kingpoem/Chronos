@@ -1,6 +1,6 @@
 //! Language items and panic handler
 
-use crate::{println, sbi};
+use crate::sbi;
 use core::panic::PanicInfo;
 
 #[panic_handler]

@@ -4,6 +4,7 @@
 use sbi_rt as sbi;
 
 /// Print a single character to console (legacy)
+#[allow(deprecated)]
 pub fn console_putchar(ch: u8) {
     let _ = sbi::legacy::console_putchar(ch as usize);
 }
@@ -16,6 +17,7 @@ pub fn console_putstr(s: &str) {
 }
 
 /// Get a character from console (non-blocking)
+#[allow(deprecated)]
 pub fn console_getchar() -> Option<u8> {
     let ch = sbi::legacy::console_getchar();
     if ch == usize::MAX {
@@ -26,15 +28,20 @@ pub fn console_getchar() -> Option<u8> {
 }
 
 /// Set timer for next timer event
+#[allow(deprecated)]
 pub fn set_timer(stime_value: u64) {
-    // Timer extension is optional; no-op placeholder for now
-    let _ = stime_value;
+    // Use legacy timer extension
+    let _ = sbi::legacy::set_timer(stime_value);
 }
 
-/// Get current time value (fallback to MMIO mtime)
+/// Get current time value using rdtime instruction
+/// The time CSR is readable from S-mode in RISC-V
 pub fn get_time() -> u64 {
-    const MTIME_ADDR: *const u64 = 0x200bff8 as *const u64;
-    unsafe { core::ptr::read_volatile(MTIME_ADDR) }
+    let time: u64;
+    unsafe {
+        core::arch::asm!("rdtime {}", out(reg) time);
+    }
+    time
 }
 
 /// Initialize SBI (just a banner)
@@ -50,5 +57,6 @@ pub fn shutdown() -> ! {
 
     // Fallback to legacy shutdown if SRST fails or returns
     // Note: sbi-rt's legacy::shutdown() panics if it returns, so this is a last resort
+    #[allow(deprecated)]
     let _ = sbi::legacy::shutdown();
 }

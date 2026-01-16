@@ -2,6 +2,5 @@
 
 int main() {
     printf("hello from user program...\n");
-
     return 0;
 }

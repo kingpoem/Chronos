@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
-#![cfg_attr(test, allow(dead_code))]
 
 extern crate alloc;
 
@@ -19,9 +18,10 @@ mod trap;
 use core::arch::global_asm;
 
 global_asm!(include_str!("entry.S"));
+global_asm!(include_str!("link_app.S"));
 
-/// 内核入口点
-/// 由 bootloader 调用
+/// kernel entry point
+/// called by bootloader
 #[no_mangle]
 pub fn kernel_main(hartid: usize, dtb: usize) -> ! {
     // Clear BSS segment
@@ -38,26 +38,33 @@ pub fn kernel_main(hartid: usize, dtb: usize) -> ! {
     println!("DTB: {:#x}", dtb);
 
     // Initialize subsystems
-    println!("\n[Init] Initializing subsystems...");
     mm::init(dtb);
     trap::init();
     task::init();
 
     println!("\n[Kernel] All subsystems initialized!");
-    
+
     // Run tests
     println!("\n[Kernel] Running tests...\n");
     test_kernel();
 
     println!("\n[Kernel] Tests completed!");
-    println!("[Kernel] System features:");
-    println!("  ✓ Buddy System Allocator");
-    println!("  ✓ SV39 Page Table");
-    println!("  ✓ Trap Handling");
-    println!("  ✓ System Calls");
-    println!("  ✓ User Mode Support (Ready)");
-    
-    println!("\n[Kernel] Shutting down...");
+
+    // Load and run user programs
+    println!("\n[Kernel] Loading user programs...");
+    task::load_apps();
+
+    // Enable timer interrupt AFTER tasks are loaded
+    // This ensures the system is fully initialized before handling interrupts
+    println!("[Kernel] Enabling timer interrupt for preemptive scheduling...");
+    trap::enable_timer_interrupt();
+
+    // Start first task
+    println!("[Kernel] Starting first task...");
+    task::switch_task();
+
+    // Should never reach here
+    println!("\n[Kernel] All tasks completed, shutting down...");
     sbi::shutdown();
 }
 

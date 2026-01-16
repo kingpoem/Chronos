@@ -7,6 +7,7 @@ use super::frame_allocator::FRAME_ALLOCATOR;
 use super::memory_layout::*;
 use crate::config::memory_layout::*;
 use core::fmt::{self, Debug, Formatter};
+use alloc::vec::Vec;
 
 /// Page Table Entry (PTE) flags
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -268,10 +269,26 @@ impl PageTable {
 
     /// Translate virtual page number to physical page number
     pub fn translate(&self, vpn: VirtPageNum) -> Option<(PhysPageNum, PTEFlags)> {
+        self.translate_with_debug(vpn, false)
+    }
+    
+    /// Translate virtual page number to physical page number with optional debug output
+    /// 
+    /// # Arguments
+    /// * `vpn` - Virtual page number to translate
+    /// * `debug` - If true, print root page table contents when accessing it
+    pub fn translate_with_debug(&self, vpn: VirtPageNum, debug: bool) -> Option<(PhysPageNum, PTEFlags)> {
         let indexes = vpn.indexes();
         let mut current_table = self as *const PageTable;
+        let mut is_root = true;  // Track if we're accessing root page table
 
         for &index in indexes.iter().take(2) {
+            // Print root page table contents if debug is enabled and this is the first access
+            if debug && is_root {
+                self.print_root_table();
+                is_root = false;
+            }
+            
             let entry = unsafe { (*current_table).entry(index) };
 
             if !entry.is_valid() {
@@ -292,17 +309,207 @@ impl PageTable {
             None
         }
     }
+    
+    /// Print root page table (Level 2) contents for debugging
+    #[allow(dead_code)]
+    pub fn print_root_table(&self) {
+        // Intentionally left blank; used only during manual debugging.
+    }
 
     /// Get the physical address of this page table
     pub fn as_ppn(&self) -> PhysPageNum {
         PhysPageNum::new((self as *const _ as usize) >> PAGE_SIZE_BITS)
     }
+    
+    /// Get a mutable reference to a leaf entry (for modifying flags)
+    /// This is unsafe because it bypasses the normal page table traversal
+    pub unsafe fn get_pte_mut(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+        let indexes = vpn.indexes();
+        let mut current_table = self as *mut PageTable;
+        
+        // Traverse to the leaf entry
+        for &index in &indexes[..2] {
+            let entry = (*current_table).entry(index);
+            if !entry.is_valid() {
+                return None;
+            }
+            if entry.is_leaf() {
+                return None; // Not a leaf entry
+            }
+            current_table = entry.ppn().as_ptr::<PageTable>();
+        }
+        
+        // Get the leaf entry
+        Some((*current_table).entry_mut(indexes[2]))
+    }
+    
+    /// Recursively deallocate this page table and all intermediate page tables
+    /// This is used when destroying an address space
+    /// 
+    /// # Safety
+    /// This function is unsafe because it assumes:
+    /// 1. This page table is no longer in use (not active in satp)
+    /// 2. All leaf entries have been unmapped
+    /// 3. The caller is responsible for ensuring no concurrent access
+    pub unsafe fn dealloc(&mut self) {
+        // Recursively deallocate all intermediate page tables
+        for i in 0..512 {
+            let entry = self.entry(i);
+            if entry.is_valid() && !entry.is_leaf() {
+                // This is an intermediate page table, recursively deallocate it
+                let sub_table_ppn = entry.ppn();
+                let sub_table = sub_table_ppn.as_ptr::<PageTable>();
+                (*sub_table).dealloc();
+                // Deallocate the intermediate page table frame
+                FRAME_ALLOCATOR.dealloc(sub_table_ppn);
+            }
+            // Clear this entry
+            self.entry_mut(i).clear();
+        }
+    }
+    
+    /// Deallocate this page table (non-recursive version)
+    /// Only deallocates intermediate page tables, not leaf pages
+    /// Leaf pages should be unmapped before calling this
+    pub fn dealloc_intermediate_tables(&mut self) {
+        let mut intermediate_ppns = Vec::new();
+            
+            // Collect all intermediate page table PPNs
+            for i in 0..512 {
+                let entry = self.entry(i);
+                if entry.is_valid() && !entry.is_leaf() {
+                    intermediate_ppns.push(entry.ppn());
+                }
+            }
+            
+            // Recursively deallocate intermediate tables
+            for ppn in intermediate_ppns {
+                let sub_table = ppn.as_ptr::<PageTable>();
+                unsafe {
+                    (*sub_table).dealloc_intermediate_tables();
+                }
+                FRAME_ALLOCATOR.dealloc(ppn);
+            }
+            
+            // Clear all entries
+            self.clear();
+    }
+    
+    /// Translate a byte buffer from user virtual address space to kernel virtual address space
+    /// This is used to safely access user space data from kernel space
+    /// 
+    /// # Arguments
+    /// * `user_va` - User virtual address
+    /// * `len` - Length of the buffer in bytes
+    /// 
+    /// # Returns
+    /// * `Vec<&'static mut [u8]>` - Vector of byte slices, each representing a contiguous page
+    /// 
+    /// # Safety
+    /// The returned slices are valid only while the page table is active and the pages are mapped.
+    /// The caller must ensure that the page table remains valid for the lifetime of the slices.
+    pub fn translated_byte_buffer(
+        &self,
+        user_va: usize,
+        len: usize,
+    ) -> Vec<&'static mut [u8]> {
+        let mut buffers = Vec::new();
+        let mut current_va = user_va;
+        let mut remaining = len;
+        
+        while remaining > 0 {
+            let vpn = VirtAddr::new(current_va).page_number();
+            let page_offset = VirtAddr::new(current_va).page_offset();
+            
+            // Translate user virtual address to physical address
+            if let Some((ppn, _flags)) = self.translate(vpn) {
+                // Convert physical address to kernel virtual address (identity mapping)
+                let kernel_va = ppn.addr().0 + page_offset;
+                
+                // Calculate how many bytes we can read from this page
+                let bytes_in_page = (PAGE_SIZE - page_offset).min(remaining);
+                
+                // Create a slice pointing to kernel virtual address
+                unsafe {
+                    let ptr = kernel_va as *mut u8;
+                    let slice = core::slice::from_raw_parts_mut(ptr, bytes_in_page);
+                    buffers.push(slice);
+                }
+                
+                current_va += bytes_in_page;
+                remaining -= bytes_in_page;
+            } else {
+                // Page not mapped, return empty buffer
+                break;
+            }
+        }
+        
+        buffers
+    }
+    
+    /// Translate a byte buffer from user virtual address space (read-only)
+    /// Similar to translated_byte_buffer but returns immutable slices
+    pub fn translated_byte_buffer_readonly(
+        &self,
+        user_va: usize,
+        len: usize,
+    ) -> Vec<&'static [u8]> {
+        let mut buffers = Vec::new();
+        let mut current_va = user_va;
+        let mut remaining = len;
+        
+        while remaining > 0 {
+            let vpn = VirtAddr::new(current_va).page_number();
+            let page_offset = VirtAddr::new(current_va).page_offset();
+            
+            // Translate user virtual address to physical address
+            if let Some((ppn, _flags)) = self.translate(vpn) {
+                // Convert physical address to kernel virtual address (identity mapping)
+                let kernel_va = ppn.addr().0 + page_offset;
+                
+                // Calculate how many bytes we can read from this page
+                let bytes_in_page = (PAGE_SIZE - page_offset).min(remaining);
+                
+                // Create a slice pointing to kernel virtual address
+                unsafe {
+                    let ptr = kernel_va as *const u8;
+                    let slice = core::slice::from_raw_parts(ptr, bytes_in_page);
+                    buffers.push(slice);
+                }
+                
+                current_va += bytes_in_page;
+                remaining -= bytes_in_page;
+            } else {
+                // Page not mapped, return empty buffer
+                break;
+            }
+        }
+        
+        buffers
+    }
+    
+    /// Print page table contents (for debugging)
+    #[allow(dead_code)]
+    pub fn print_contents(&self, _max_entries: usize) {
+        // Intentionally left blank; used only during manual debugging.
+    }
+
+    /// Recursively print page table entries
+    #[allow(dead_code)]
+    fn print_level(
+        &self,
+        _table: &PageTable,
+        _level: usize,
+        _base_vpn: usize,
+        _count: &mut usize,
+        _max_entries: usize,
+    ) {
+        // Intentionally left blank; used only during manual debugging.
+    }
 }
 
 impl Debug for PageTable {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PageTable")
-            .field("addr", &(self as *const _ as usize))
-            .finish()
+        write!(f, "PageTable")
     }
 }

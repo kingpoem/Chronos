@@ -14,7 +14,7 @@ OBJDUMP := rust-objdump
 OBJCOPY := rust-objcopy
 GDB := riscv64-unknown-elf-gdb
 
-.PHONY: all kernel rustsbi build run clean debug
+.PHONY: all bootloader kernel user rustsbi build run clean debug
 
 all: build
 
@@ -30,7 +30,12 @@ rustsbi:
 	@$(OBJCOPY) --binary-architecture=riscv64 $(RUSTSBI_ELF) --strip-all -O binary $(RUSTSBI_BIN)
 	@echo "RustSBI prototyper built: $(RUSTSBI_BIN)"
 
-kernel:
+user:
+	@echo "Building user applications..."
+	@cd user && cargo build --$(MODE) --target $(TARGET)
+
+
+kernel: user
 	@echo "Building kernel..."
 	@cd kernel && cargo build --$(MODE) --target $(TARGET)
 

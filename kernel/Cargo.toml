@@ -3,6 +3,8 @@ name = "chronos-kernel"
 version = "0.1.0"
 edition = "2021"
 
+[build-dependencies]
+
 [dependencies]
 riscv = "0.11"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
@@ -10,6 +12,7 @@ spin = "0.9"
 sbi-rt = { version = "0.0.3", features = ["legacy"] }
 buddy_system_allocator = "0.9"
 bitflags = "2.4"
+xmas-elf = "0.10.0"
 
 [profile.release]
 opt-level = "s"
