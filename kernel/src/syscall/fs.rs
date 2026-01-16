@@ -23,15 +23,13 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
             let current_pid = match task_manager.get_current_task() {
                 Some(pid) => pid,
                 None => {
-                    crate::sbi::console_putstr("[sys_write] Error: No current task\n");
                     return -1;
                 }
             };
-            
+
             let task = match task_manager.get_task(current_pid) {
                 Some(task) => task,
                 None => {
-                    crate::sbi::console_putstr("[sys_write] Error: Task not found\n");
                     return -1;
                 }
             };
@@ -67,9 +65,6 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
             
             total_written as isize
         }
-        _ => {
-            crate::sbi::console_putstr("[sys_write] Error: Unsupported fd\n");
-            -1
-        }
+        _ => -1,
     }
 }

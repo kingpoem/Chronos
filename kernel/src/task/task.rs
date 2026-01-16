@@ -1,11 +1,11 @@
 //! Task Control Block
-//! 
+//!
 //! Defines the structure and operations for tasks (processes)
 
 use super::context::TaskContext;
-use crate::mm::MemorySet;
-use crate::mm::memory_layout::PhysPageNum;
 use crate::config::memory_layout::{KERNEL_STACK_SIZE, PAGE_SIZE};
+use crate::mm::memory_layout::PhysPageNum;
+use crate::mm::MemorySet;
 use crate::trap::TrapContext;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -30,7 +30,7 @@ pub struct TaskControlBlock {
 
 impl TaskControlBlock {
     /// Get trap context
-    /// 
+    ///
     /// # Safety
     /// This function assumes:
     /// 1. We're in kernel address space (satp points to kernel page table)
@@ -40,14 +40,7 @@ impl TaskControlBlock {
         // Convert physical page number to kernel virtual address (identity mapping)
         // Since kernel uses identity mapping, physical address = virtual address
         let kernel_va = self.trap_cx_ppn.addr().0;
-        
-        // Debug: print trap context address
-        crate::sbi::console_putstr("[get_trap_cx] PPN=0x");
-        crate::trap::print_hex_usize(self.trap_cx_ppn.0);
-        crate::sbi::console_putstr(" -> kernel_va=0x");
-        crate::trap::print_hex_usize(kernel_va);
-        crate::sbi::console_putstr("\n");
-        
+
         // Safety check: ensure we're not accessing kernel code section
         extern "C" {
             fn stext();
@@ -55,58 +48,43 @@ impl TaskControlBlock {
         }
         let stext_addr = stext as *const () as usize;
         let ekernel_addr = ekernel as *const () as usize;
-        
+
         if kernel_va >= stext_addr && kernel_va < ekernel_addr {
-            crate::sbi::console_putstr("[get_trap_cx] ERROR: Attempting to access kernel code section!\n");
-            crate::sbi::console_putstr("[get_trap_cx] ERROR: PPN=0x");
-            crate::trap::print_hex_usize(self.trap_cx_ppn.0);
-            crate::sbi::console_putstr(", kernel_va=0x");
-            crate::trap::print_hex_usize(kernel_va);
-            crate::sbi::console_putstr(", stext=0x");
-            crate::trap::print_hex_usize(stext_addr);
-            crate::sbi::console_putstr("\n");
             panic!("get_trap_cx: Attempting to access kernel code section! This indicates a bug in trap_cx_ppn calculation.");
         }
-        
+
         unsafe { &mut *(kernel_va as *mut TrapContext) }
     }
-    
+
     /// Get user token (satp value)
     pub fn get_user_token(&self) -> usize {
         self.memory_set.token()
     }
-    
+
     /// Create a new task from ELF data
     pub fn new(elf_data: &[u8], app_id: usize) -> Self {
         let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
-        
+
         // Verify entry point page is mapped
         use crate::mm::memory_layout::VirtAddr;
         let entry_vpn = VirtAddr::new(entry_point).page_number();
-        if let Some((ppn, flags)) = memory_set.page_table().translate(entry_vpn) {
-            crate::println!("[Task] Entry page verified: VPN=0x{:x} -> PPN=0x{:x}, flags={:?}", 
-                entry_vpn.0, ppn.0, flags);
-            if !flags.contains(crate::mm::page_table::PTEFlags::X) {
-                crate::println!("[Task] ERROR: Entry page missing X (Execute) permission!");
-            }
-            if !flags.contains(crate::mm::page_table::PTEFlags::U) {
-                crate::println!("[Task] ERROR: Entry page missing U (User) permission!");
+        if let Some((_ppn, flags)) = memory_set.page_table().translate(entry_vpn) {
+            if !flags.contains(crate::mm::page_table::PTEFlags::X)
+                || !flags.contains(crate::mm::page_table::PTEFlags::U)
+            {
+                panic!("Entry page missing required permissions");
             }
         } else {
-            crate::println!("[Task] ERROR: Entry page NOT mapped! VPN=0x{:x}, entry_point=0x{:x}", 
-                entry_vpn.0, entry_point);
             panic!("Entry page not mapped!");
         }
-        
+
         // Trap context is stored in user address space at TRAP_CONTEXT
         let trap_cx_pa = memory_set
             .translate(TRAP_CONTEXT)
             .expect("Failed to translate TRAP_CONTEXT address");
-        
-        let trap_cx_ppn = PhysPageNum::new(
-            trap_cx_pa >> PAGE_SIZE.trailing_zeros() as usize
-        );
-        
+
+        let trap_cx_ppn = PhysPageNum::new(trap_cx_pa >> PAGE_SIZE.trailing_zeros() as usize);
+
         // Safety check: ensure trap_cx_ppn doesn't point to kernel code section
         extern "C" {
             fn stext();
@@ -115,16 +93,16 @@ impl TaskControlBlock {
         let stext_addr = stext as *const () as usize;
         let ekernel_addr = ekernel as *const () as usize;
         let kernel_va = trap_cx_ppn.addr().0;
-        
+
         if kernel_va >= stext_addr && kernel_va < ekernel_addr {
             panic!("trap_cx_ppn calculation error: points to kernel code section! PPN=0x{:x}, kernel_va=0x{:x}", trap_cx_ppn.0, kernel_va);
         }
-        
+
         let task_status = TaskStatus::Ready;
         let (_kernel_stack_bottom, kernel_stack_top) = kernel_stack_position(app_id);
         let task_cx = TaskContext::goto_trap_return(kernel_stack_top);
-        
-        Self {
+
+        let tcb = Self {
             task_status,
             task_cx,
             memory_set,
@@ -134,7 +112,25 @@ impl TaskControlBlock {
             program_brk: user_sp,
             entry_point,
             user_sp,
-        }
+        };
+
+        // Initialize trap context with user_satp
+        let trap_cx = tcb.get_trap_cx();
+        let user_token = tcb.get_user_token();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            0, // kernel_satp - not used
+            kernel_stack_top,
+            trap_handler as usize,
+        );
+        // Set user_satp to enable virtual memory for user program
+        trap_cx.user_satp = user_token;
+        // Set kernel_sp for next trap entry
+        trap_cx.kernel_sp = kernel_stack_top;
+
+
+        tcb
     }
 }
 
@@ -146,18 +142,11 @@ pub fn kernel_stack_position(app_id: usize) -> (usize, usize) {
     // Start from TRAP_CONTEXT - PAGE_SIZE and go down
     // Each stack needs KERNEL_STACK_SIZE + PAGE_SIZE (guard page)
     // Note: We start from TRAP_CONTEXT - PAGE_SIZE (not TRAP_CONTEXT) to leave space for trap context
-    let top = TRAP_CONTEXT.wrapping_sub(PAGE_SIZE).wrapping_sub(app_id * (KERNEL_STACK_SIZE + PAGE_SIZE));
+    let top = TRAP_CONTEXT
+        .wrapping_sub(PAGE_SIZE)
+        .wrapping_sub(app_id * (KERNEL_STACK_SIZE + PAGE_SIZE));
     let bottom = top.wrapping_sub(KERNEL_STACK_SIZE);
-    
-    // Debug: print kernel stack position
-    crate::sbi::console_putstr("[Kernel Stack] app_id=");
-    crate::trap::print_hex_usize(app_id);
-    crate::sbi::console_putstr(", bottom=0x");
-    crate::trap::print_hex_usize(bottom);
-    crate::sbi::console_putstr(", top=0x");
-    crate::trap::print_hex_usize(top);
-    crate::sbi::console_putstr("\n");
-    
+
     (bottom, top)
 }
 
@@ -165,16 +154,8 @@ const TRAMPOLINE: usize = usize::MAX - PAGE_SIZE + 1;
 const TRAP_CONTEXT: usize = TRAMPOLINE - PAGE_SIZE;
 
 lazy_static! {
-    // KERNEL_SPACE is initialized and activated in mm::init()
-    // We need to ensure it's properly set up when accessed
-    // The actual kernel space is stored in mm::KERNEL_SPACE_INTERNAL
-    // We'll create a new one here for compatibility, but it should match the activated one
-    pub static ref KERNEL_SPACE: spin::Mutex<MemorySet> = {
-        // When first accessed, create a kernel space
-        // Note: This should match the one created in mm::init()
-        // The actual activated kernel space is in mm module
-        spin::Mutex::new(MemorySet::new_kernel())
-    };
+    // Legacy placeholder; kernel token comes from mm::get_kernel_token().
+    pub static ref KERNEL_SPACE: spin::Mutex<MemorySet> = spin::Mutex::new(MemorySet::new_kernel());
 }
 
 extern "C" {

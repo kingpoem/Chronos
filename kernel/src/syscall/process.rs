@@ -8,7 +8,6 @@ pub fn sys_exit(exit_code: i32) -> ! {
 }
 
 pub fn sys_yield() -> isize {
-    crate::println!("[Syscall] sys_yield called");
     crate::task::switch_task();
     0
 }

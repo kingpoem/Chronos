@@ -24,14 +24,14 @@ impl TaskContext {
         }
     }
     
-    /// Create a context that will jump to trap_return
+    /// Create a context that will jump to trap_return via trampoline
     /// The trap context should be prepared on kernel stack before calling __restore
     pub fn goto_trap_return(kstack_ptr: usize) -> Self {
-        extern "C" {
-            fn __restore();
-        }
+        // Get __restore's trampoline address from trap module
+        let restore_trampoline_addr = crate::trap::get_restore_trampoline_addr();
+        
         Self {
-            ra: __restore as *const () as usize,
+            ra: restore_trampoline_addr,
             sp: kstack_ptr,
             s: [0; 12],
         }

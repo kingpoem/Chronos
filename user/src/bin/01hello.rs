@@ -6,6 +6,6 @@ extern crate user_lib;
 
 #[no_mangle]
 fn main() -> i32 {
-    println!("Hello, world from Rust!");
+    println!("Hello, world from Rust Userspace!");
     0
 }

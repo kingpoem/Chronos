@@ -27,10 +27,6 @@ path = "src/bin/power_5.rs"
 name = "power_7"
 path = "src/bin/power_7.rs"
 
-[[bin]]
-name = "test_simple"
-path = "src/bin/test_simple.rs"
-
 [profile.release]
 opt-level = "s"
 lto = true

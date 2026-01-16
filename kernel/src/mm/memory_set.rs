@@ -21,6 +21,14 @@ use crate::config::memory_layout::{PAGE_SIZE, MEMORY_END, USER_STACK_SIZE};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::arch::asm;
+use lazy_static::lazy_static;
+use spin::Mutex;
+
+lazy_static! {
+    /// Global trampoline frame - shared between all address spaces
+    /// This ensures the trampoline code is at the same physical address in both kernel and user spaces
+    static ref TRAMPOLINE_FRAME: Mutex<Option<PhysPageNum>> = Mutex::new(None);
+}
 
 /// Memory area map type
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -172,23 +180,6 @@ impl MapArea {
         let perm_bits = self.map_perm.bits();
         let pte_flags = PTEFlags::V | PTEFlags::from_bits(perm_bits).unwrap();
         
-        // Debug: print permission conversion for important pages (entry point area)
-        let va = vpn.addr().0;
-        if va >= 0x10000 && va < 0x11000 {
-            crate::sbi::console_putstr("[map_one] Mapping entry area: VA=0x");
-            crate::trap::print_hex_usize(va);
-            crate::sbi::console_putstr(", MapPermission bits=0x");
-            crate::trap::print_hex_usize(perm_bits as usize);
-            crate::sbi::console_putstr(", PTEFlags bits=0x");
-            crate::trap::print_hex_usize(pte_flags.bits() as usize);
-            crate::sbi::console_putstr(" (");
-            if pte_flags.contains(PTEFlags::R) { crate::sbi::console_putstr("R"); }
-            if pte_flags.contains(PTEFlags::W) { crate::sbi::console_putstr("W"); }
-            if pte_flags.contains(PTEFlags::X) { crate::sbi::console_putstr("X"); }
-            if pte_flags.contains(PTEFlags::U) { crate::sbi::console_putstr("U"); }
-            crate::sbi::console_putstr(")\n");
-        }
-        
         // Check if page is already mapped
         if let Some((existing_ppn, existing_flags)) = page_table.translate(vpn) {
             // When multiple segments map to the same page, we should reuse the existing physical page
@@ -216,19 +207,7 @@ impl MapArea {
                 
                 // Check if permissions changed
                 if merged_flags.bits() != existing_flags.bits() {
-                    // Need to update permissions only (not remap)
-                    let va = vpn.addr().0;
-                    crate::sbi::console_putstr("[INFO] Merging permissions for VA=0x");
-                    crate::trap::print_hex_usize(va);
-                    crate::sbi::console_putstr(", existing flags=0x");
-                    crate::trap::print_hex_usize(existing_flags.bits() as usize);
-                    crate::sbi::console_putstr(", new flags=0x");
-                    crate::trap::print_hex_usize(pte_flags.bits() as usize);
-                    crate::sbi::console_putstr(", merged flags=0x");
-                    crate::trap::print_hex_usize(merged_flags.bits() as usize);
-                    crate::sbi::console_putstr("\n");
-                    
-                    // Update the PTE flags directly
+                    // Update permissions only (not remap)
                     unsafe {
                         let indexes = vpn.indexes();
                         let mut current_table = page_table as *mut PageTable;
@@ -250,16 +229,6 @@ impl MapArea {
             }
             
             // Can't reuse - this is an error case (shouldn't happen for user space)
-            let va = vpn.addr().0;
-            crate::sbi::console_putstr("[WARNING] Page conflict: VA=0x");
-            crate::trap::print_hex_usize(va);
-            crate::sbi::console_putstr(", existing PPN=0x");
-            crate::trap::print_hex_usize(existing_ppn.0);
-            crate::sbi::console_putstr(", existing flags=0x");
-            crate::trap::print_hex_usize(existing_flags.bits() as usize);
-            crate::sbi::console_putstr(", new flags=0x");
-            crate::trap::print_hex_usize(pte_flags.bits() as usize);
-            crate::sbi::console_putstr("\n");
             panic!("Page conflict that cannot be resolved by reusing existing page");
         }
         
@@ -286,14 +255,6 @@ impl MapArea {
         
         // Map the page
         if let Err(e) = page_table.map(vpn, ppn, pte_flags) {
-            let va = vpn.addr().0;
-            crate::sbi::console_putstr("[ERROR] Failed to map page: VA=0x");
-            crate::trap::print_hex_usize(va);
-            crate::sbi::console_putstr(", PPN=0x");
-            crate::trap::print_hex_usize(ppn.0);
-            crate::sbi::console_putstr(", Error: ");
-            crate::sbi::console_putstr(e);
-            crate::sbi::console_putstr("\n");
             panic!("Failed to map page: {}", e);
         }
     }
@@ -341,83 +302,22 @@ impl MapArea {
         let mut start: usize = 0;
         let mut current_vpn = self.vpn_range.start();
         let len = data.len();
-        let aligned_start_va = self.start_va();  // Page-aligned start address
         let actual_start_va = self.actual_start_va;  // Actual start address (before alignment)
-        let end_va = self.end_va();
-        
-        crate::sbi::console_putstr("[copy_data] Starting: actual_VA=0x");
-        crate::trap::print_hex_usize(actual_start_va);
-        crate::sbi::console_putstr(", aligned_VA=0x");
-        crate::trap::print_hex_usize(aligned_start_va);
-        crate::sbi::console_putstr("-0x");
-        crate::trap::print_hex_usize(end_va);
-        crate::sbi::console_putstr(", data_len=");
-        crate::trap::print_hex_usize(len);
-        crate::sbi::console_putstr("\n");
-        
+
         loop {
             let src = &data[start..len.min(start + PAGE_SIZE)];
             let current_va = current_vpn.addr().0;
-            
-            crate::sbi::console_putstr("[copy_data] Processing page: VPN=0x");
-            crate::trap::print_hex_usize(current_vpn.0);
-            crate::sbi::console_putstr(", VA=0x");
-            crate::trap::print_hex_usize(current_va);
-            crate::sbi::console_putstr(", data_offset=");
-            crate::trap::print_hex_usize(start);
-            crate::sbi::console_putstr(", src_len=");
-            crate::trap::print_hex_usize(src.len());
-            crate::sbi::console_putstr("\n");
-            
+
             // Translate virtual page to physical page
             let (ppn, _flags) = match page_table.translate(current_vpn) {
-                Some((ppn, flags)) => {
-                    crate::sbi::console_putstr("[copy_data] Translation: VPN=0x");
-                    crate::trap::print_hex_usize(current_vpn.0);
-                    crate::sbi::console_putstr(" -> PPN=0x");
-                    crate::trap::print_hex_usize(ppn.0);
-                    crate::sbi::console_putstr("\n");
-                    (ppn, flags)
-                },
-                None => {
-                    crate::sbi::console_putstr("[copy_data] ERROR: Page not mapped: VPN=0x");
-                    crate::trap::print_hex_usize(current_vpn.0);
-                    crate::sbi::console_putstr(", VA=0x");
-                    crate::trap::print_hex_usize(current_va);
-                    crate::sbi::console_putstr("\n");
-                    panic!("Page not mapped in copy_data");
-                }
+                Some((ppn, flags)) => (ppn, flags),
+                None => panic!("Page not mapped in copy_data"),
             };
-            
+
             // Convert physical page number to kernel virtual address (identity mapping)
             // Since kernel uses identity mapping, physical address = virtual address
             let kernel_va = ppn.addr().0;
-            
-            crate::sbi::console_putstr("[copy_data] PPN=0x");
-            crate::trap::print_hex_usize(ppn.0);
-            crate::sbi::console_putstr(" -> PA=0x");
-            crate::trap::print_hex_usize(kernel_va);
-            crate::sbi::console_putstr(" (kernel_va)\n");
-            
-            // Check if this physical page is tracked in data_frames
-            if let Some(frame_tracker) = self.data_frames.get(&current_vpn) {
-                let tracked_ppn = frame_tracker.ppn;
-                if tracked_ppn != ppn {
-                    crate::sbi::console_putstr("[copy_data] WARNING: data_frames mismatch! VPN=0x");
-                    crate::trap::print_hex_usize(current_vpn.0);
-                    crate::sbi::console_putstr(", tracked PPN=0x");
-                    crate::trap::print_hex_usize(tracked_ppn.0);
-                    crate::sbi::console_putstr(", page_table PPN=0x");
-                    crate::trap::print_hex_usize(ppn.0);
-                    crate::sbi::console_putstr("\n");
-                    crate::sbi::console_putstr("[copy_data] Using page_table PPN (correct)\n");
-                }
-            } else {
-                crate::sbi::console_putstr("[copy_data] INFO: VPN=0x");
-                crate::trap::print_hex_usize(current_vpn.0);
-                crate::sbi::console_putstr(" not in data_frames (may be from another MapArea)\n");
-            }
-            
+
             // Safety check: ensure we're not writing to kernel code section
             // Kernel code section starts at 0x80200000 (stext)
             extern "C" {
@@ -426,108 +326,36 @@ impl MapArea {
             }
             let stext_addr = stext as *const () as usize;
             let ekernel_addr = ekernel as *const () as usize;
-            
-            crate::sbi::console_putstr("[copy_data] Safety check: kernel_va=0x");
-            crate::trap::print_hex_usize(kernel_va);
-            crate::sbi::console_putstr(", stext=0x");
-            crate::trap::print_hex_usize(stext_addr);
-            crate::sbi::console_putstr(", ekernel=0x");
-            crate::trap::print_hex_usize(ekernel_addr);
-            crate::sbi::console_putstr("\n");
-            
+
             if kernel_va >= stext_addr && kernel_va < ekernel_addr {
-                crate::sbi::console_putstr("[copy_data] ERROR: Attempting to write to kernel section!\n");
-                crate::sbi::console_putstr("[copy_data] ERROR: VPN=0x");
-                crate::trap::print_hex_usize(current_vpn.0);
-                crate::sbi::console_putstr(", VA=0x");
-                crate::trap::print_hex_usize(current_va);
-                crate::sbi::console_putstr(", PPN=0x");
-                crate::trap::print_hex_usize(ppn.0);
-                crate::sbi::console_putstr(", kernel_va=0x");
-                crate::trap::print_hex_usize(kernel_va);
-                crate::sbi::console_putstr("\n");
-                crate::sbi::console_putstr("[copy_data] ERROR: This indicates a serious bug in page allocation or mapping!\n");
-                panic!("Attempting to write to kernel section! VPN=0x{:x}, PPN=0x{:x}, kernel_va=0x{:x}", 
+                panic!("Attempting to write to kernel section! VPN=0x{:x}, PPN=0x{:x}, kernel_va=0x{:x}",
                     current_vpn.0, ppn.0, kernel_va);
             }
-            
+
             // Additional check: ensure physical address is in user space range
             // User space physical pages should be >= KERNEL_HEAP_START
             use crate::config::memory_layout::KERNEL_HEAP_START;
             if kernel_va < KERNEL_HEAP_START {
-                crate::sbi::console_putstr("[copy_data] ERROR: Physical address is below KERNEL_HEAP_START!\n");
-                crate::sbi::console_putstr("[copy_data] ERROR: kernel_va=0x");
-                crate::trap::print_hex_usize(kernel_va);
-                crate::sbi::console_putstr(", KERNEL_HEAP_START=0x");
-                crate::trap::print_hex_usize(KERNEL_HEAP_START);
-                crate::sbi::console_putstr("\n");
                 panic!("Physical address below KERNEL_HEAP_START! This should not happen for user space pages.");
             }
-            
+
             // Calculate offset within the page: actual segment start VA - page start VA
-            // This ensures that if multiple segments map to the same page,
-            // each segment writes to the correct offset instead of overwriting from the start
-            // Use actual_start_va (before alignment) instead of aligned_start_va
             let page_offset = if current_va <= actual_start_va {
                 actual_start_va - current_va
             } else {
-                // This shouldn't happen, but handle it gracefully
                 0
             };
-            
+
             // Calculate how much data to copy in this page
-            // The data might not start at the beginning of the page
-            let data_start_in_page = if start == 0 {
-                page_offset
-            } else {
-                // For subsequent pages, data starts at the beginning
-                0
-            };
-            
+            let data_start_in_page = if start == 0 { page_offset } else { 0 };
+
             // Calculate the actual destination address within the page
             let dst = (kernel_va + data_start_in_page) as *mut u8;
-            
-            crate::sbi::console_putstr("[copy_data] Page offset=0x");
-            crate::trap::print_hex_usize(page_offset);
-            crate::sbi::console_putstr(", data_start_in_page=0x");
-            crate::trap::print_hex_usize(data_start_in_page);
-            crate::sbi::console_putstr(", Copying ");
-            crate::trap::print_hex_usize(src.len());
-            crate::sbi::console_putstr(" bytes to kernel_va=0x");
-            crate::trap::print_hex_usize(kernel_va + data_start_in_page);
-            crate::sbi::console_putstr("\n");
-            
-            // Debug: print source data (first 4 bytes)
-            crate::sbi::console_putstr("[copy_data] Source data[0..");
-            crate::trap::print_hex_usize(src.len().min(4));
-            crate::sbi::console_putstr("]=");
-            for i in 0..src.len().min(4) {
-                crate::sbi::console_putstr(" 0x");
-                crate::trap::print_hex_usize(src[i] as usize);
-            }
-            crate::sbi::console_putstr("\n");
-            
+
             unsafe {
                 core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
             }
-            
-            // Verify: read back the first 4 bytes
-            unsafe {
-                let verify_ptr = (kernel_va + data_start_in_page) as *const u32;
-                let verify = core::ptr::read(verify_ptr);
-                crate::sbi::console_putstr("[copy_data] After copy, first 4 bytes at PA=0x");
-                crate::trap::print_hex_usize(kernel_va + data_start_in_page);
-                crate::sbi::console_putstr(": 0x");
-                crate::trap::print_hex_usize(verify as usize);
-                crate::sbi::console_putstr("\n");
-            }
-            
-            crate::sbi::console_putstr("[copy_data] Copy completed for VPN=0x");
-            crate::trap::print_hex_usize(current_vpn.0);
-            crate::sbi::console_putstr(", copied ");
-            crate::trap::print_hex_usize(src.len());
-            crate::sbi::console_putstr(" bytes\n");
-            
+
             // CRITICAL FIX: increment start by actual bytes copied, not PAGE_SIZE
             // This ensures we don't skip data when file_size < PAGE_SIZE
             start += src.len();
@@ -536,8 +364,6 @@ impl MapArea {
             }
             current_vpn.0 += 1;
         }
-        
-        crate::sbi::console_putstr("[copy_data] All data copied successfully\n");
     }
 }
 
@@ -585,23 +411,16 @@ impl MemorySet {
             fn sbss();
             fn ebss();
             fn ekernel();
+            fn strampoline();
         }
         
-        crate::sbi::console_putstr("[MemorySet::new_kernel] Creating kernel address space\n");
         let mut memory_set = Self::new_bare();
-        
+
         // Map physical memory from MEMORY_START to stext (for bootloader and early init)
-        // This ensures we can access memory before kernel code starts
         use crate::config::memory_layout::MEMORY_START;
         let stext_addr = stext as *const () as usize;
-        crate::sbi::console_putstr("[MemorySet::new_kernel] MEMORY_START=0x");
-        crate::trap::print_hex_usize(MEMORY_START);
-        crate::sbi::console_putstr(", stext=0x");
-        crate::trap::print_hex_usize(stext_addr);
-        crate::sbi::console_putstr("\n");
-        
+
         if MEMORY_START < stext_addr {
-            crate::sbi::console_putstr("[MemorySet::new_kernel] Step 1: Mapping pre-kernel memory\n");
             memory_set.push(
                 MapArea::new(
                     MEMORY_START,
@@ -612,24 +431,53 @@ impl MemorySet {
                 None,
             );
         }
-        
-        // Map .text section (R-X)
+
+        // Map .text section in three parts:
+        // 1. Entry code (before trampoline): R-X
+        // 2. Trampoline page (contains KERNEL_SATP): RWX 
+        // 3. Rest of text (after trampoline): R-X
         let stext_addr = stext as *const () as usize;
         let etext_addr = etext as *const () as usize;
-        crate::sbi::console_putstr("[MemorySet::new_kernel] Step 2: Mapping .text section: 0x");
-        crate::trap::print_hex_usize(stext_addr);
-        crate::sbi::console_putstr(" - 0x");
-        crate::trap::print_hex_usize(etext_addr);
-        crate::sbi::console_putstr(" (R-X)\n");
+
+        let strampoline_addr = strampoline as *const () as usize;
+        let etrampoline_addr = strampoline_addr + PAGE_SIZE;
+
+        // Part 1: Entry code before trampoline
+        if stext_addr < strampoline_addr {
+            memory_set.push(
+                MapArea::new(
+                    stext_addr,
+                    strampoline_addr,
+                    MapType::Identical,
+                    MapPermission::R | MapPermission::X,
+                ),
+                None,
+            );
+        }
+
+        // Part 2: Trampoline page (RWX because KERNEL_SATP is stored here)
         memory_set.push(
             MapArea::new(
-                stext_addr,
-                etext_addr,
+                strampoline_addr,
+                etrampoline_addr,
                 MapType::Identical,
-                MapPermission::R | MapPermission::X,
+                MapPermission::R | MapPermission::W | MapPermission::X,
             ),
             None,
         );
+        
+        // Part 3: Rest of text after trampoline
+        if etrampoline_addr < etext_addr {
+            memory_set.push(
+                MapArea::new(
+                    etrampoline_addr,
+                    etext_addr,
+                    MapType::Identical,
+                    MapPermission::R | MapPermission::X,
+                ),
+                None,
+            );
+        }
         
         // Map .rodata section (R--)
         let srodata_addr = srodata as *const () as usize;
@@ -711,10 +559,7 @@ impl MemorySet {
         // 1. TRAMPOLINE (R-X) - trampoline code
         // 2. TRAP_CONTEXT (RW-) - trap context storage (one page per task, but we map a region)
         // 3. Kernel stacks (RW-) - below TRAP_CONTEXT
-        extern "C" {
-            fn __alltraps();
-        }
-        let trampoline_phys = __alltraps as *const () as usize;
+        let trampoline_phys = strampoline as *const () as usize;
         let trampoline_virt = TRAMPOLINE;
         
         // Map kernel stacks region (RW-)
@@ -758,60 +603,24 @@ impl MemorySet {
         // Note: TRAMPOLINE is at usize::MAX - PAGE_SIZE + 1, which is the last page
         // TRAMPOLINE + PAGE_SIZE would overflow to 0, so we can't use MapArea::new()
         // Instead, we directly map the single page using page_table.map()
+        // Map trampoline by physical address via identity mapping
+        let trampoline_frame = PhysPageNum::new(trampoline_phys / PAGE_SIZE);
         let trampoline_vpn = super::memory_layout::VirtAddr::new(trampoline_virt).page_number();
-        
-        // Allocate a frame for trampoline
-        let trampoline_frame = FRAME_ALLOCATOR.alloc().expect("Failed to allocate frame for trampoline");
-        let pte_flags = PTEFlags::V | PTEFlags::R | PTEFlags::X; // R-X for trampoline code
-        
-        // Map the page directly
-        memory_set.page_table_mut().map(trampoline_vpn, trampoline_frame, pte_flags)
+        // CRITICAL: Include W flag because KERNEL_SATP is stored in trampoline page
+        let pte_flags = PTEFlags::V | PTEFlags::R | PTEFlags::W | PTEFlags::X;
+        memory_set
+            .page_table_mut()
+            .map(trampoline_vpn, trampoline_frame, pte_flags)
             .expect("Failed to map TRAMPOLINE page");
         
-        // Copy trampoline code to the mapped page
-        // Convert physical page number to kernel virtual address (identity mapping)
-        let trampoline_dst_va = trampoline_frame.addr().0;
-        let trampoline_dst = trampoline_dst_va as *mut u8;
-        
-        // trampoline_src is already a kernel virtual address (identity mapped)
-        let trampoline_src = trampoline_phys as *const u8;
-        
-        unsafe {
-            // Clear the page first
-            core::ptr::write_bytes(trampoline_dst, 0, PAGE_SIZE);
-            // Copy trampoline code (trampoline is small, less than PAGE_SIZE)
-            let trampoline_size = PAGE_SIZE; // Copy full page to be safe
-            core::ptr::copy_nonoverlapping(
-                trampoline_src,
-                trampoline_dst,
-                trampoline_size,
-            );
-        }
+        // Also map the TRAMPOLINE_FRAME for user spaces to reuse
+        *TRAMPOLINE_FRAME.lock() = Some(trampoline_frame);
         
         memory_set
     }
     
     /// Push a map area into memory set
     pub fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
-        let start_va = map_area.start_va();
-        let end_va = map_area.end_va();
-        let area_type = match map_area.map_type() {
-            MapType::Identical => "Identical",
-            MapType::Framed => "Framed",
-        };
-        crate::sbi::console_putstr("[MapArea] VA=0x");
-        crate::trap::print_hex_usize(start_va);
-        crate::sbi::console_putstr("-0x");
-        crate::trap::print_hex_usize(end_va);
-        crate::sbi::console_putstr(", type=");
-        crate::sbi::console_putstr(area_type);
-        if let Some(d) = data {
-            crate::sbi::console_putstr(", data=");
-            crate::trap::print_hex_usize(d.len());
-            crate::sbi::console_putstr(" bytes");
-        }
-        crate::sbi::console_putstr("\n");
-        
         map_area.map(self.page_table_mut());
         
         if let Some(data) = data {
@@ -961,9 +770,7 @@ impl MemorySet {
     pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize) {
         use xmas_elf::ElfFile;
         
-        crate::println!("[MemorySet] Parsing ELF file ({} bytes)", elf_data.len());
         let elf = ElfFile::new(elf_data).expect("Failed to parse ELF");
-        crate::println!("[MemorySet] ELF parsed successfully");
         let elf_header = elf.header;
         let ph_count = elf_header.pt2.ph_count();
         
@@ -976,50 +783,29 @@ impl MemorySet {
         let user_stack_bottom = USER_STACK_BOTTOM;
         let user_stack_top = USER_STACK_TOP;
         
-        // Get trampoline's physical address from kernel space
-        extern "C" {
-            fn __alltraps();
-        }
-        let trampoline_phys = __alltraps as *const () as usize;
-        
         // Map trampoline in user address space (same virtual address as kernel)
         // Note: TRAMPOLINE is at usize::MAX - PAGE_SIZE + 1, which is the last page
         // TRAMPOLINE + PAGE_SIZE would overflow to 0, so we can't use MapArea::new()
         // Instead, we directly map the single page using page_table.map()
         let trampoline_vpn = super::memory_layout::VirtAddr::new(trampoline_start).page_number();
-        
-        // Allocate a frame for trampoline
-        let trampoline_frame = FRAME_ALLOCATOR.alloc().expect("Failed to allocate frame for trampoline");
-        let pte_flags = PTEFlags::V | PTEFlags::R | PTEFlags::X; // R-X for trampoline code
-        
-        // Map the page directly
+
+        // Reuse the global trampoline frame (must already be allocated by kernel space)
+        let trampoline_frame = {
+            let global_frame = TRAMPOLINE_FRAME.lock();
+            global_frame.expect("Trampoline frame not initialized - kernel space must be created first")
+        };
+        // CRITICAL: Do NOT include U (User) flag here!
+        // The trampoline code is executed in S-mode (supervisor mode), not U-mode.
+        // In RISC-V, supervisor mode CANNOT execute from pages with U=1 set.
+        // After switching to user page table with csrw satp, we're still in S-mode
+        // until sret, so the trampoline must be S-mode accessible (U=0).
+        // User mode will enter via trap (which jumps to stvec), not by executing
+        // directly from the trampoline.
+        let pte_flags = PTEFlags::V | PTEFlags::R | PTEFlags::X;
+
+        // Map the page directly to the SAME physical frame as kernel space
         memory_set.page_table_mut().map(trampoline_vpn, trampoline_frame, pte_flags)
             .expect("Failed to map TRAMPOLINE page");
-        
-        // Copy trampoline code to the mapped page
-        // Convert physical page number to kernel virtual address (identity mapping)
-        let trampoline_dst_va = trampoline_frame.addr().0;
-        let trampoline_dst = trampoline_dst_va as *mut u8;
-        
-        // trampoline_src is already a kernel virtual address (identity mapped)
-        let trampoline_src = trampoline_phys as *const u8;
-        
-        unsafe {
-            // Clear the page first
-            core::ptr::write_bytes(trampoline_dst, 0, PAGE_SIZE);
-            // Copy trampoline code (trampoline is small, less than PAGE_SIZE)
-            let trampoline_size = PAGE_SIZE; // Copy full page to be safe
-            core::ptr::copy_nonoverlapping(
-                trampoline_src,
-                trampoline_dst,
-                trampoline_size,
-            );
-        }
-        
-        // Add a debug output for the mapped trampoline
-        crate::sbi::console_putstr("[MapArea] VA=0x");
-        crate::trap::print_hex_usize(trampoline_start);
-        crate::sbi::console_putstr(" (TRAMPOLINE), type=Framed, R-X\n");
         
         // Map trap context (stored in user address space but accessible from kernel)
         memory_set.push(
@@ -1083,15 +869,6 @@ impl MemorySet {
                     perm |= MapPermission::X;
                 }
                 
-                // Debug: print segment information
-                crate::println!("[ELF] Segment {}: vaddr=0x{:x}, mem_size={}, file_size={}, flags: R={} W={} X={}, perm: R={} W={} X={} U={}",
-                    i, start_va, mem_size, file_size,
-                    is_read, is_write, is_execute,
-                    perm.contains(MapPermission::R),
-                    perm.contains(MapPermission::W),
-                    perm.contains(MapPermission::X),
-                    perm.contains(MapPermission::U));
-                
                 // Extract segment data from ELF file
                 // The ELF file structure is preserved - we just read the segment content
                 let segment_data = if file_size > 0 {
@@ -1099,18 +876,7 @@ impl MemorySet {
                 } else {
                     &[]
                 };
-                
-                // Debug: print first few bytes of code segments
-                if is_execute && segment_data.len() >= 4 {
-                    crate::sbi::console_putstr("[ELF] Code segment first 4 bytes: ");
-                    for i in 0..4 {
-                        crate::sbi::console_putstr("0x");
-                        crate::trap::print_hex_usize(segment_data[i] as usize);
-                        crate::sbi::console_putstr(" ");
-                    }
-                    crate::sbi::console_putstr("\n");
-                }
-                
+
                 // Create MapArea for this segment (段)
                 // Use actual_start_va (vaddr) to preserve segment offset for proper data placement
                 // aligned_start_va is used for page table mapping (must be page-aligned)

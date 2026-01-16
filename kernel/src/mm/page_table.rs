@@ -311,59 +311,9 @@ impl PageTable {
     }
     
     /// Print root page table (Level 2) contents for debugging
-    /// This prints all valid entries in the root page table
+    #[allow(dead_code)]
     pub fn print_root_table(&self) {
-        crate::sbi::console_putstr("\n[PageTable] Root page table (Level 2) contents:\n");
-        crate::sbi::console_putstr("[PageTable] Root PPN: 0x");
-        crate::trap::print_hex_usize(self.as_ppn().as_usize());
-        crate::sbi::console_putstr("\n");
-        
-        let mut valid_count = 0;
-        for (index, entry) in self.entries.iter().enumerate() {
-            if entry.is_valid() {
-                valid_count += 1;
-                let ppn = entry.ppn();
-                let flags = entry.flags();
-                let is_leaf = entry.is_leaf();
-                
-                crate::sbi::console_putstr("  [");
-                crate::trap::print_hex_usize(index);
-                crate::sbi::console_putstr("] PPN=0x");
-                crate::trap::print_hex_usize(ppn.as_usize());
-                crate::sbi::console_putstr(" Flags=");
-                
-                if flags.contains(PTEFlags::V) {
-                    crate::sbi::console_putstr("V");
-                }
-                if flags.contains(PTEFlags::R) {
-                    crate::sbi::console_putstr("R");
-                }
-                if flags.contains(PTEFlags::W) {
-                    crate::sbi::console_putstr("W");
-                }
-                if flags.contains(PTEFlags::X) {
-                    crate::sbi::console_putstr("X");
-                }
-                if flags.contains(PTEFlags::U) {
-                    crate::sbi::console_putstr("U");
-                }
-                if flags.contains(PTEFlags::G) {
-                    crate::sbi::console_putstr("G");
-                }
-                
-                if is_leaf {
-                    crate::sbi::console_putstr(" [LEAF: 1GB page]");
-                } else {
-                    crate::sbi::console_putstr(" [-> Level 1]");
-                }
-                
-                crate::sbi::console_putstr("\n");
-            }
-        }
-        
-        crate::sbi::console_putstr("[PageTable] Total valid entries in root: ");
-        crate::trap::print_hex_usize(valid_count);
-        crate::sbi::console_putstr(" / 512\n");
+        // Intentionally left blank; used only during manual debugging.
     }
 
     /// Get the physical address of this page table
@@ -539,88 +489,22 @@ impl PageTable {
     }
     
     /// Print page table contents (for debugging)
-    /// This recursively traverses the page table and prints all valid mappings
-    pub fn print_contents(&self, max_entries: usize) {
-        crate::sbi::console_putstr("\n[PageTable] Printing page table contents (max ");
-        crate::trap::print_hex_usize(max_entries);
-        crate::sbi::console_putstr(" entries)...\n");
-        
-        let mut count = 0;
-        self.print_level(self, 0, 0, &mut count, max_entries);
-        
-        crate::sbi::console_putstr("[PageTable] Total entries printed: ");
-        crate::trap::print_hex_usize(count);
-        crate::sbi::console_putstr("\n");
+    #[allow(dead_code)]
+    pub fn print_contents(&self, _max_entries: usize) {
+        // Intentionally left blank; used only during manual debugging.
     }
-    
+
     /// Recursively print page table entries
+    #[allow(dead_code)]
     fn print_level(
         &self,
-        table: &PageTable,
-        level: usize,
-        base_vpn: usize,
-        count: &mut usize,
-        max_entries: usize,
+        _table: &PageTable,
+        _level: usize,
+        _base_vpn: usize,
+        _count: &mut usize,
+        _max_entries: usize,
     ) {
-        
-        if *count >= max_entries {
-            return;
-        }
-        
-        for (index, entry) in table.entries.iter().enumerate() {
-            if *count >= max_entries {
-                break;
-            }
-            
-            if entry.is_valid() {
-                let flags = entry.flags();
-                let ppn = entry.ppn();
-                
-                if entry.is_leaf() {
-                    // Leaf entry - actual page mapping
-                    let vpn = base_vpn | (index << (9 * (2 - level)));
-                    let va = vpn << PAGE_SIZE_BITS;
-                    let pa = ppn.as_usize() << PAGE_SIZE_BITS;
-                    
-                    crate::sbi::console_putstr("  L");
-                    crate::trap::print_hex_usize(level);
-                    crate::sbi::console_putstr(" VA=0x");
-                    crate::trap::print_hex_usize(va);
-                    crate::sbi::console_putstr(" -> PA=0x");
-                    crate::trap::print_hex_usize(pa);
-                    crate::sbi::console_putstr(" PPN=0x");
-                    crate::trap::print_hex_usize(ppn.as_usize());
-                    crate::sbi::console_putstr(" Flags=");
-                    
-                    if flags.contains(PTEFlags::R) {
-                        crate::sbi::console_putstr("R");
-                    }
-                    if flags.contains(PTEFlags::W) {
-                        crate::sbi::console_putstr("W");
-                    }
-                    if flags.contains(PTEFlags::X) {
-                        crate::sbi::console_putstr("X");
-                    }
-                    if flags.contains(PTEFlags::U) {
-                        crate::sbi::console_putstr("U");
-                    }
-                    if flags.contains(PTEFlags::G) {
-                        crate::sbi::console_putstr("G");
-                    }
-                    crate::sbi::console_putstr("\n");
-                    
-                    *count += 1;
-                } else if level < 2 {
-                    // Intermediate entry - recurse to next level
-                    let next_base_vpn = base_vpn | (index << (9 * (2 - level)));
-                    let next_table_ptr = ppn.as_ptr::<PageTable>();
-                    unsafe {
-                        let next_table = &*next_table_ptr;
-                        self.print_level(next_table, level + 1, next_base_vpn, count, max_entries);
-                    }
-                }
-            }
-        }
+        // Intentionally left blank; used only during manual debugging.
     }
 }
 

@@ -7,6 +7,9 @@ pub struct TrapContext {
     pub sepc: usize,
     // Store user satp for address space switching in __restore
     pub user_satp: usize,
+    // Store kernel stack pointer for next trap entry
+    // This will be loaded into sscratch before sret to user mode
+    pub kernel_sp: usize,
 }
 
 impl TrapContext {
@@ -25,6 +28,7 @@ impl TrapContext {
             sstatus,
             sepc: entry,
             user_satp: 0,
+            kernel_sp: 0,  // Will be set when needed
         };
         cx.set_sp(sp);
         cx
@@ -38,24 +42,27 @@ impl TrapContext {
         _kernel_sp: usize,
         _trap_handler: usize,
     ) -> Self {
-        // Read current sstatus and create a new one with SPP set to User and SIE enabled
-        // According to rCore implementation: use set_spp and set_sie, then read
-        // CRITICAL: This function assumes interrupts are disabled and timer is NOT set
-        // The caller must ensure these conditions before calling this function
+        // Create sstatus value for returning to user mode:
+        // - SPP = User (bit 8 = 0): sret will return to user mode
+        // - SPIE = 1 (bit 5): sret will copy SPIE to SIE, enabling interrupts
+        // - SIE = 0 (bit 1): doesn't matter, will be overwritten by sret
+        //
+        // The sret instruction does:
+        // 1. SIE = SPIE (enable interrupts if SPIE was set)
+        // 2. SPIE = 1
+        // 3. SPP = 0 (user mode)
+        // 4. PC = sepc (jump to user code)
         let sstatus_val = unsafe {
             // Save original sstatus bits
             let original_bits: usize;
             core::arch::asm!("csrr {}, sstatus", out(reg) original_bits);
             
-            // Set SPP to User and SIE to enabled (modifies actual register)
-            // This is the rCore way: modify register to get the value we want
-            // NOTE: This will temporarily enable interrupts, so timer must NOT be set
-            sstatus::set_spp(sstatus::SPP::User);
-            sstatus::set_sie();
+            // Modify sstatus register to get the value we want
+            sstatus::set_spp(sstatus::SPP::User);  // SPP = User
+            sstatus::set_spie();  // SPIE = 1 (CRITICAL: this is what enables interrupts after sret!)
             let result = sstatus::read(); // Read the modified value
             
             // CRITICAL: Restore original sstatus immediately
-            // Use inline assembly for fastest possible restoration
             core::arch::asm!("csrw sstatus, {}", in(reg) original_bits);
             
             result
@@ -63,9 +70,10 @@ impl TrapContext {
         
         let mut cx = Self {
             x: [0; 32],
-            sstatus: sstatus_val, // SPP is set to User, SIE is enabled
+            sstatus: sstatus_val, // SPP is set to User, SPIE is set (enables interrupts after sret)
             sepc: entry,
             user_satp: 0,  // Will be set when task is created
+            kernel_sp: 0,  // Will be set when task is created
         };
         cx.set_sp(user_sp);
         

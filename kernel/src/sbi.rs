@@ -34,16 +34,14 @@ pub fn set_timer(stime_value: u64) {
     let _ = sbi::legacy::set_timer(stime_value);
 }
 
-/// Get current time value (fallback to MMIO mtime)
-/// Note: After paging is enabled, we need to use virtual address
-/// Since kernel uses identity mapping, VA == PA, so this should work
-/// But we need to ensure MMIO region is mapped in kernel address space
+/// Get current time value using rdtime instruction
+/// The time CSR is readable from S-mode in RISC-V
 pub fn get_time() -> u64 {
-    // MMIO base address for QEMU virt machine
-    // mtime is at 0x200bff8 (CLINT base + 0xbff8)
-    // With identity mapping, virtual address equals physical address
-    const MTIME_ADDR: *const u64 = 0x200bff8 as *const u64;
-    unsafe { core::ptr::read_volatile(MTIME_ADDR) }
+    let time: u64;
+    unsafe {
+        core::arch::asm!("rdtime {}", out(reg) time);
+    }
+    time
 }
 
 /// Initialize SBI (just a banner)

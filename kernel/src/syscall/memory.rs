@@ -45,42 +45,37 @@ pub fn sys_mmap(
 ) -> isize {
     // Only support anonymous mappings for now
     if (flags & MAP_ANONYMOUS) == 0 {
-        crate::sbi::console_putstr("[mmap] Error: Only MAP_ANONYMOUS is supported\n");
         return MAP_FAILED;
     }
-    
+
     // Validate length
     if length == 0 {
-        crate::sbi::console_putstr("[mmap] Error: length must be > 0\n");
         return MAP_FAILED;
     }
-    
+
     // Align length to page boundary
     let aligned_length = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-    
+
     // Get current task
     let mut task_manager = TASK_MANAGER.lock();
     let current_pid = match task_manager.get_current_task() {
         Some(pid) => pid,
         None => {
-            crate::sbi::console_putstr("[mmap] Error: No current task\n");
             return MAP_FAILED;
         }
     };
-    
+
     let task = match task_manager.get_task_mut(current_pid) {
         Some(task) => task,
         None => {
-            crate::sbi::console_putstr("[mmap] Error: Task not found\n");
             return MAP_FAILED;
         }
     };
-    
+
     // Determine virtual address
     let virt_addr = if addr != 0 && (flags & MAP_FIXED) != 0 {
         // Use specified address (must be page-aligned)
         if addr % PAGE_SIZE != 0 {
-            crate::sbi::console_putstr("[mmap] Error: addr must be page-aligned\n");
             return MAP_FAILED;
         }
         addr
@@ -89,21 +84,13 @@ pub fn sys_mmap(
         addr & !(PAGE_SIZE - 1) // Align to page boundary
     } else {
         // Let kernel choose an address
-        // For simplicity, we'll use a fixed region above user stack
-        // In a real OS, this would be more sophisticated
         const MMAP_START: usize = 0x20000000; // Start of mmap region
-        
-        // Find a free region (simplified: just use MMAP_START for now)
-        // TODO: Implement proper address space management
         MMAP_START
     };
-    
-    // Check if the region overlaps with existing mappings
-    // For simplicity, we'll just check if the start address is valid
-    // In a real OS, we'd check the entire range
+
     let start_va = virt_addr;
     let end_va = start_va + aligned_length;
-    
+
     // Convert protection flags to MapPermission
     let mut perm = MapPermission::U; // User mode
     if (prot & PROT_READ) != 0 {
@@ -115,26 +102,15 @@ pub fn sys_mmap(
     if (prot & PROT_EXEC) != 0 {
         perm |= MapPermission::X;
     }
-    
+
     // Create map area
     let map_area = MapArea::new(start_va, end_va, MapType::Framed, perm);
-    
+
     // Add to memory set
     task.memory_set.push(map_area, None);
-    
-    // Flush TLB if needed (sfence.vma is done in activate, but we're not switching address space)
-    // For now, we'll rely on the next address space switch to flush TLB
-    
+
     drop(task_manager);
-    
-    crate::sbi::console_putstr("[mmap] Mapped region: 0x");
-    crate::trap::print_hex_usize(start_va);
-    crate::sbi::console_putstr(" - 0x");
-    crate::trap::print_hex_usize(end_va);
-    crate::sbi::console_putstr(" (length: ");
-    crate::trap::print_hex_usize(aligned_length);
-    crate::sbi::console_putstr(")\n");
-    
+
     start_va as isize
 }
 
@@ -150,39 +126,34 @@ pub fn sys_mmap(
 pub fn sys_munmap(addr: usize, length: usize) -> isize {
     // Validate address
     if addr % PAGE_SIZE != 0 {
-        crate::sbi::console_putstr("[munmap] Error: addr must be page-aligned\n");
         return -1;
     }
-    
+
     // Validate length
     if length == 0 {
-        crate::sbi::console_putstr("[munmap] Error: length must be > 0\n");
         return -1;
     }
-    
+
     // Align length to page boundary
     let aligned_length = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
     let start_va = addr;
     let end_va = start_va + aligned_length;
-    
+
     // Get current task
     let mut task_manager = TASK_MANAGER.lock();
     let current_pid = match task_manager.get_current_task() {
         Some(pid) => pid,
         None => {
-            crate::sbi::console_putstr("[munmap] Error: No current task\n");
             return -1;
         }
     };
-    
+
     let task = match task_manager.get_task_mut(current_pid) {
         Some(task) => task,
         None => {
-            crate::sbi::console_putstr("[munmap] Error: Task not found\n");
             return -1;
         }
-    };
-    
+    };    
     // Find and remove the map area that contains this address
     // We need to find the area that contains [start_va, end_va)
     let mut found = false;
@@ -203,42 +174,20 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
                 break;
             } else {
                 // Partial unmapping not supported yet
-                crate::sbi::console_putstr("[munmap] Error: Partial unmapping not supported\n");
-                crate::sbi::console_putstr("[munmap] Requested: 0x");
-                crate::trap::print_hex_usize(start_va);
-                crate::sbi::console_putstr(" - 0x");
-                crate::trap::print_hex_usize(end_va);
-                crate::sbi::console_putstr(", Area: 0x");
-                crate::trap::print_hex_usize(area_start);
-                crate::sbi::console_putstr(" - 0x");
-                crate::trap::print_hex_usize(area_end);
-                crate::sbi::console_putstr("\n");
                 return -1;
             }
         }
     }
-    
+
     if !found {
-        crate::sbi::console_putstr("[munmap] Error: Region not found\n");
-        crate::sbi::console_putstr("[munmap] Requested: 0x");
-        crate::trap::print_hex_usize(start_va);
-        crate::sbi::console_putstr(" - 0x");
-        crate::trap::print_hex_usize(end_va);
-        crate::sbi::console_putstr("\n");
         return -1;
     }
-    
+
     // Remove the area
     task.memory_set.remove_area(area_index);
-    
+
     drop(task_manager);
-    
-    crate::sbi::console_putstr("[munmap] Unmapped region: 0x");
-    crate::trap::print_hex_usize(start_va);
-    crate::sbi::console_putstr(" - 0x");
-    crate::trap::print_hex_usize(end_va);
-    crate::sbi::console_putstr("\n");
-    
+
     0
 }
 

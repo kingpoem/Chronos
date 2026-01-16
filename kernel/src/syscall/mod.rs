@@ -30,7 +30,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_MMAP => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         _ => {
-            crate::println!("[kernel] Unsupported syscall_id: {}", syscall_id);
+            println!("[syscall] Unsupported syscall_id: {}", syscall_id);
             -1
         }
     }
