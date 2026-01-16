@@ -3,11 +3,11 @@
 ## 版本信息
 - **版本**: Chronos OS v0.2.0
 - **日期**: 2025-12-30
-- **状态**: ✅ 成功实现
+- **状态**: 成功实现
 
 ## 已完成的功能
 
-### 1. ✅ Buddy System Allocator
+### 1. Buddy System Allocator
 - **替换**: 原有的简单链表分配器 → Buddy System Allocator
 - **依赖**: `buddy_system_allocator = "0.9"`
 - **优势**:
@@ -16,7 +16,7 @@
   - 更高效的内存管理
 - **位置**: `kernel/src/mm/heap.rs`
 
-### 2. ✅ 完整的 Trap 处理
+### 2. 完整的 Trap 处理
 - **陷入上下文保存/恢复** (`trap/trap.S`)
   - `__alltraps`: 保存所有 32 个通用寄存器
   - `__restore`: 恢复寄存器并返回用户态
@@ -29,7 +29,7 @@
   - 保存 sstatus 和 sepc
   - 支持用户态初始化
 
-### 3. ✅ 地址空间管理 (MemorySet)
+### 3. 地址空间管理 (MemorySet)
 - **MemorySet 实现** (`mm/memory_set.rs`)
   - 管理虚拟内存空间
   - 支持恒等映射和按帧映射
@@ -42,7 +42,7 @@
   - 创建内核地址空间
   - 支持用户地址空间创建
 
-### 4. ✅ 任务管理基础设施
+### 4. 任务管理基础设施
 - **TaskContext** (`task/context.rs`)
   - 保存任务切换所需的寄存器 (ra, sp, s0-s11)
   - 支持跳转到 trap_return
@@ -54,7 +54,7 @@
   - 简单任务管理器
   - 支持任务切换
 
-### 5. ✅ 系统调用框架
+### 5. 系统调用框架
 - **系统调用分发** (`syscall/mod.rs`)
   - SYSCALL_WRITE (64)
   - SYSCALL_EXIT (93)
@@ -175,11 +175,11 @@ DTB: 0x0
 
 [Kernel] Tests completed!
 [Kernel] System features:
-  ✓ Buddy System Allocator
-  ✓ SV39 Page Table
-  ✓ Trap Handling
-  ✓ System Calls
-  ✓ User Mode Support (Ready)
+  - Buddy System Allocator
+  - SV39 Page Table
+  - Trap Handling
+  - System Calls
+  - User Mode Support (Ready)
 
 [Kernel] Shutting down...
 ```
