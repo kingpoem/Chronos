@@ -1,11 +1,12 @@
-# 用户态支持实现总结
+# Chronos OS 用户态支持实现
 
 ## 版本信息
 - **版本**: Chronos OS v0.2.0
 - **日期**: 2025-12-30
 - **状态**: 成功实现
+## 1. 概述
 
-## 已完成的功能
+本文档详细描述了 Chronos OS v0.2.0 在支持用户态（User Mode）程序运行方面的技术实现。用户态支持涉及特权级切换、地址空间隔离、系统调用接口以及用户运行时环境的构建。
 
 ### 1. Buddy System Allocator
 - **替换**: 原有的简单链表分配器 → Buddy System Allocator
@@ -185,122 +186,90 @@ DTB: 0x0
 ```
 
 ---
+=======
+目标是通过这些机制，让操作系统能够加载、运行并安全管控不可信的应用程序。
 
-## 关键技术细节
+## 2. 特权级切换机制
 
-### 1. Trap 处理流程
+### 2.1 硬件基础
+RISC-V 架构提供了 M (Machine), S (Supervisor), U (User) 三种特权级。Chronos OS 内核运行在 S 态，用户程序运行在 U 态。
+`sstatus` 寄存器的 `SPP` (Previous Privilege) 位用于在 S 与 U 之间记录切换前的状态。
 
+### 2.2 Trap 上下文保存与恢复 (`trap/trap.S`)
+当 U 态程序执行系统调用 (`ecall`) 或发生异常时，硬件会自动跳转到 `stvec` 寄存器指向的地址。由于我们采用了页表机制，这个地址必须指向 Trampoline 页面（跳板页）。
+
+- **陷入 (Trap Entry)**:
+  `__alltraps` 是 Trap 处理的汇编入口：
+  1. 将用户栈指针 (sp) 保存到 `sscratch`，并从 `sscratch` 获取内核栈指针。
+  2. 在内核栈上保存所有 31 个通用寄存器、`sstatus` 和 `sepc`。
+  3. 读取 `KERNEL_SATP`，切换页表到内核地址空间。
+  4. 跳转到 Rust 实现的 `trap_handler`。
+
+- **恢复 (Trap Return)**:
+  `__restore` 负责执行逆向操作：
+  1. 切换页表回用户地址空间。
+  2. 从内核栈恢复保存的寄存器环境。
+  3. 执行 `sret` 指令，硬件自动将 PC 设置为 `sepc`，并将特权级降回 U 态。
+>>>>>>> Stashed changes
+
+## 3. 地址空间隔离
+
+为了保护内核与各用户进程，Chronos OS 实现了严格的地址空间隔离。
+
+### 3.1 虚拟内存布局
+- **用户空间**: 位于虚拟地址的低端 (`0x0` - `0x8000_0000` 以下)。
+- **内核空间**: 位于虚拟地址的高端 (`0x8020_0000` 向上)。
+- **Trampoline**: 统一映射在虚拟地址空间的最高页 (`MAX_VIRT_ADDR - PAGE_SIZE`)。
+
+### 3.2 MemorySet 实现 (`mm/memory_set.rs`)
+`MemorySet` 是地址空间的逻辑抽象，包含：
+- **页表根节点 (PageTable)**: 存储页表的物理页帧号。
+- **逻辑段 (MapArea)**: 如代码段、数据段、用户栈等。
+- **帧追踪器 (FrameTracker)**: 确保物理页资源的 RAII 管理。
+
+## 4. 用户运行时库 (`user/src/lib.rs`)
+
+为了让 Rust 编写的应用程序能在裸机上运行，我们需要提供最小运行时支持（类似于 Linux 的 C Runtime）。
+
+### 4.1 链接与入口
+- **Linker Script (`linker.ld`)**: 指定程序入口点为 `_start`。
+- **Entry Point (`lib.rs`)**: `_start` 函数负责初始化堆（若需）、读取参数，最后调用 `main`。
+- **Language Items**: 提供 `panic_handler`，当用户程序崩溃时调用 `sys_exit`。
+
+### 4.2 系统调用封装
+用户库封装了 `ecall` 指令，向应用程序提供 Rustic 的 API：
+```rust
+pub fn sys_write(fd: usize, buffer: &[u8]) -> isize;
+pub fn sys_exit(exit_code: i32) -> !;
+pub fn sys_yield() -> isize;
+pub fn sys_get_time() -> isize;
 ```
-User Mode → ecall
-    ↓
-__alltraps (trap.S)
-    ↓
-保存所有寄存器到 TrapContext
-    ↓
-trap_handler (Rust)
-    ↓
-syscall 分发
-    ↓
-执行具体系统调用
-    ↓
-__restore (trap.S)
-    ↓
-恢复寄存器
-    ↓
-sret → User Mode
-```
 
-### 2. 地址空间隔离
+## 5. 系统调用实现 (`kernel/src/syscall/`)
 
-- **内核地址空间**: 恒等映射 (va == pa)
-- **用户地址空间**: 按需分配帧，独立页表
-- **切换**: 通过修改 `satp` 寄存器
+内核通过 System Call Interface (SBI/ABI) 为用户提供服务。
 
-### 3. 内存布局
+### 5.1 调用约定
+- **调用号**: 寄存器 `a7`。
+- **参数**: 寄存器 `a0` - `a5`。
+- **返回值**: 寄存器 `a0`。
 
-```
-物理地址空间:
-0x8000_0000  ┌─────────────────┐
-             │   RustSBI (M)   │
-0x8020_0000  ├─────────────────┤
-             │   Kernel Code   │
-0x8042_0000  ├─────────────────┤
-             │   Kernel Heap   │  (8MB, Buddy Allocator)
-0x80C2_0000  ├─────────────────┤
-             │  Available RAM  │  (~119MB)
-0x8800_0000  └─────────────────┘
+### 5.2 核心系统调用
+| 编号 | 名称 | 功能描述 | 实现文件 |
+| :--- | :--- | :--- | :--- |
+| 64 | `sys_write` | 将缓冲区数据写入指定文件描述符 (目前仅支持 stdout) | `syscall/fs.rs` |
+| 93 | `sys_exit` | 终止当前进程并返回退出码 | `syscall/process.rs` |
+| 124 | `sys_yield` | 主动让出 CPU 使用权 | `syscall/process.rs` |
+| 169 | `sys_get_time`| 获取当前系统时间 (毫秒) | `syscall/process.rs` |
+| 222 | `sys_mmap` | 申请内存映射 (Anonymous) | `syscall/memory.rs` |
+| 215 | `sys_munmap` | 释放内存映射 | `syscall/memory.rs` |
 
-虚拟地址空间 (用户态):
-0x0000_0000  ┌─────────────────┐
-             │   User Stack    │
-             ├─────────────────┤
-             │   User Heap     │
-             ├─────────────────┤
-             │   User Data     │
-             ├─────────────────┤
-             │   User Code     │
-             └─────────────────┘
-```
+## 6. 测试应用
+
+目前 `user/src/bin` 目录下包含若干测试程序：
+- `01hello.rs`: 基础输出测试。
+- `power_*.rs`: 幂运算计算测试，验证计算密集型任务。
+- `00poweroff.rs`: 关机测试。
 
 ---
-
-## 下一步开发建议
-
-### 短期 (1-2 周)
-
-1. **加载用户程序**
-   - 实现 ELF 解析器
-   - 从二进制加载用户程序
-   - 创建用户地址空间
-
-2. **进程调度器**
-   - 实现时间片轮转调度
-   - 集成时钟中断
-   - 实现 sys_yield
-
-3. **简单用户程序**
-   - 创建 user/ 目录
-   - 编写简单的用户态测试程序
-   - 使用系统调用
-
-### 中期 (2-4 周)
-
-4. **进程管理**
-   - fork/exec/wait 系统调用
-   - 进程生命周期管理
-   - 父子进程关系
-
-5. **文件系统**
-   - VFS 抽象层
-   - 简单文件系统 (如 FAT32)
-   - 文件相关系统调用
-
-### 长期 (1-2 月)
-
-6. **高级特性**
-   - 信号处理
-   - 进程间通信 (IPC)
-   - 多核支持
-   - 网络栈
-
----
-
-## 参考资源
-
-- **rCore Tutorial**: https://rcore-os.github.io/rCore-Tutorial-Book-v3/
-- **RISC-V Spec**: https://riscv.org/technical/specifications/
-- **xv6-riscv**: https://github.com/mit-pdos/xv6-riscv
-- **Buddy Allocator**: https://docs.rs/buddy_system_allocator/
-
----
-
-## 贡献者
-
-**南京邮电大学**  
-学号: T202510293997784
-
----
-
-## 许可证
-
-MIT License
+Copyright © 2025 Chronos OS Developers
